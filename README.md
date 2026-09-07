@@ -4,6 +4,13 @@ Ein kleines Programm, um einem einzelnen Ordner ein eigenes Symbol (Icon)
 zu geben - z. B. um deine Steam-Spieleordner, Projektordner oder
 Video-Sammlungen auf einen Blick auseinanderzuhalten.
 
+## Screenshots
+<img width="531" height="748" alt="image" src="https://github.com/user-attachments/assets/70093436-c6f4-44de-bcda-d0f842bf521c" />
+<img width="684" height="782" alt="image" src="https://github.com/user-attachments/assets/d19d752d-e6d3-421c-8314-296818108b67" />
+<img width="641" height="732" alt="image" src="https://github.com/user-attachments/assets/98cf6c1c-624d-481b-9114-d55db18b7982" />
+<img width="519" height="738" alt="image" src="https://github.com/user-attachments/assets/8f64199e-4dc1-4bf4-85dd-198a3ad86d75" />
+
+
 **Das ist noch eine fruehe Version.** Sie kann schon:
 
 - **Eigenes Bild auswaehlen** - wird automatisch in ein richtiges
