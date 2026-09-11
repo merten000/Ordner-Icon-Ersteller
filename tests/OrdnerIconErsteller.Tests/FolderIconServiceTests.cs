@@ -475,6 +475,153 @@ namespace OrdnerIconErsteller.Tests
             }
         }
 
+        [Fact]
+        public void Set_MitBeschaedigterVorhandenerStatusdatei_WirftUndUeberschreibtFremdeDateienNicht()
+        {
+            // Regressionstest aus der 4. ChatGPT-Prüfung (Fehler #1): "Icon setzen" prüfte
+            // bei einer vorhandenen Statusdatei bisher nur File.Exists() - ohne sie zu
+            // validieren. Damit konnte eine beschädigte/fremde Statusdatei dazu führen,
+            // dass die Sicherungsphase komplett übersprungen und fremde Dateien
+            // ungesichert überschrieben wurden.
+            string targetFolder = Directory.CreateTempSubdirectory("OrdnerIconErsteller_Ziel_").FullName;
+            string imageDir = Directory.CreateTempSubdirectory("OrdnerIconErsteller_Bild_").FullName;
+            try
+            {
+                string desktopIniPath = Path.Combine(targetFolder, "desktop.ini");
+                byte[] fremdeIniBytes = Encoding.Unicode.GetBytes("[.ShellClassInfo]\r\nIconResource=Fremd.ico,0\r\n");
+                File.WriteAllBytes(desktopIniPath, fremdeIniBytes);
+
+                string icoPath = Path.Combine(targetFolder, "FolderIcon.ico");
+                byte[] fremdeIcoBytes = { 9, 9, 9, 9 };
+                File.WriteAllBytes(icoPath, fremdeIcoBytes);
+
+                // Eine beschädigte Statusdatei mit unbekannter Formatversion - genau die
+                // vom Prüfbericht reproduzierte Ausgangslage.
+                string markerPath = Path.Combine(targetFolder, ".ordnericonersteller-state");
+                File.WriteAllText(markerPath, "FormatVersion=999" + Environment.NewLine,
+                    new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+
+                string image = CreateTestImage(imageDir, "bild.png");
+
+                Assert.Throws<InvalidDataException>(() => FolderIconService.SetFolderIcon(targetFolder, image));
+
+                // Die fremden Dateien dürfen NICHT überschrieben worden sein, und es
+                // dürfen keine (unvollständigen) Sicherungen entstanden sein.
+                Assert.Equal(fremdeIniBytes, File.ReadAllBytes(desktopIniPath));
+                Assert.Equal(fremdeIcoBytes, File.ReadAllBytes(icoPath));
+                Assert.False(File.Exists(desktopIniPath + ".before-ordnericonersteller.bak"));
+                Assert.False(File.Exists(icoPath + ".before-ordnericonersteller.bak"));
+            }
+            finally
+            {
+                TryDeleteDirectory(targetFolder);
+                TryDeleteDirectory(imageDir);
+            }
+        }
+
+        [Fact]
+        public void Set_MitVorhandenemMarkerAberFehlenderSicherung_BrichtVorJederAenderungAb()
+        {
+            // Weiterer Fall von Fehler #1: der Marker selbst ist strukturell gültig,
+            // behauptet aber eine Sicherung, die tatsächlich fehlt (z. B. versehentlich
+            // gelöscht). Auch das darf "Icon setzen" nicht unbemerkt überschreiben -
+            // dieselbe Vorabprüfung wie bei "Icon entfernen" muss auch hier gelten.
+            string targetFolder = Directory.CreateTempSubdirectory("OrdnerIconErsteller_Ziel_").FullName;
+            string imageDir = Directory.CreateTempSubdirectory("OrdnerIconErsteller_Bild_").FullName;
+            try
+            {
+                string desktopIniPath = Path.Combine(targetFolder, "desktop.ini");
+                File.WriteAllText(desktopIniPath, "[.ShellClassInfo]\r\nIconResource=Alt.ico,0\r\n", Encoding.Unicode);
+                File.SetAttributes(desktopIniPath, FileAttributes.Archive);
+
+                string image = CreateTestImage(imageDir, "bild.png");
+                FolderIconService.SetFolderIcon(targetFolder, image);
+
+                // Die ini-Sicherung geht nachträglich verloren, der Marker behauptet
+                // aber weiterhin, es gäbe eine.
+                string iniBackupPath = desktopIniPath + ".before-ordnericonersteller.bak";
+                File.SetAttributes(iniBackupPath, FileAttributes.Normal);
+                File.Delete(iniBackupPath);
+
+                byte[] aktiveIniBytesVorher = File.ReadAllBytes(desktopIniPath);
+
+                Assert.Throws<InvalidDataException>(() => FolderIconService.SetFolderIcon(targetFolder, image));
+
+                Assert.Equal(aktiveIniBytesVorher, File.ReadAllBytes(desktopIniPath));
+            }
+            finally
+            {
+                TryDeleteDirectory(targetFolder);
+                TryDeleteDirectory(imageDir);
+            }
+        }
+
+        [Fact]
+        public void Remove_SchlaegtBeimZweitenSchrittDesRestoreTauschsFehl_StelltVorherigeDateiWiederHer()
+        {
+            // Regressionstest aus der 4. ChatGPT-Prüfung (Fehler #2): scheitert beim
+            // Wiederherstellen aus der Sicherung der ZWEITE Schritt des internen
+            // Dateitauschs - die vorherige, von uns gesetzte Datei wurde bereits
+            // erfolgreich beiseite verschoben ("Safety"), aber die Sicherung ließ sich
+            // nicht mehr an den Zielpfad verschieben -, muss der Tausch das selbst
+            // erkennen und die vorherige Datei SOFORT zurückholen. Vorher hing das
+            // Zurückrollen von einem "erfolgreich getauscht"-Flag ab, das der Aufrufer
+            // in genau diesem Fall nie gesetzt hatte - die vorherige Datei wäre nur noch
+            // unter dem (später als "nicht mehr benötigt" gelöschten) Safety-Pfad
+            // vorhanden gewesen.
+            string targetFolder = Directory.CreateTempSubdirectory("OrdnerIconErsteller_Ziel_").FullName;
+            string imageDir = Directory.CreateTempSubdirectory("OrdnerIconErsteller_Bild_").FullName;
+            try
+            {
+                string originalIniContent = "[.ShellClassInfo]\r\nIconResource=EinAnderesIcon.ico,0\r\n";
+                string desktopIniPath = Path.Combine(targetFolder, "desktop.ini");
+                File.WriteAllText(desktopIniPath, originalIniContent, Encoding.Unicode);
+                File.SetAttributes(desktopIniPath, FileAttributes.Archive);
+
+                string image = CreateTestImage(imageDir, "bild.png");
+                FolderIconService.SetFolderIcon(targetFolder, image);
+
+                // Unsere eigene, aktuell aktive desktop.ini (aus dem SetFolderIcon-Aufruf).
+                byte[] aktuelleIniBytes = File.ReadAllBytes(desktopIniPath);
+                string iniBackupPath = desktopIniPath + ".before-ordnericonersteller.bak";
+
+                // Die Sicherungsdatei exklusiv sperren: der ERSTE Schritt des
+                // Wiederherstellungs-Tauschs (unsere aktuelle Datei beiseite verschieben)
+                // gelingt, der ZWEITE Schritt (Sicherung an den Zielpfad verschieben)
+                // schlägt fehl - exakt die vom Prüfbericht reproduzierte Fehlerstelle.
+                using (new FileStream(iniBackupPath, FileMode.Open, FileAccess.Read, FileShare.None))
+                {
+                    Assert.ThrowsAny<IOException>(() => FolderIconService.RemoveFolderIcon(targetFolder));
+                }
+
+                // Die vorherige (von uns gesetzte) desktop.ini darf NICHT verloren gehen -
+                // sie muss unverändert an ihrem eigentlichen Platz liegen, nicht nur unter
+                // einem Safety-Pfad, der sonst gleich als "nicht mehr benötigt" gelöscht
+                // worden wäre.
+                Assert.True(File.Exists(desktopIniPath));
+                Assert.Equal(aktuelleIniBytes, File.ReadAllBytes(desktopIniPath));
+                Assert.True(File.Exists(iniBackupPath),
+                    "Die Sicherung darf durch den gescheiterten Tausch nicht verloren gehen.");
+
+                // Keine übrig gebliebenen Safety-Dateien aus dem gescheiterten Tausch.
+                var safetyDateien = new DirectoryInfo(targetFolder).GetFiles("*.restoresafety*");
+                Assert.Empty(safetyDateien);
+
+                // Der Vorgang muss danach normal wiederholbar sein - da dieser Ordner
+                // eine eigene, gesicherte Original-desktop.ini hatte, wird diese jetzt
+                // wiederhergestellt (nicht komplett gelöscht).
+                FolderIconService.RemoveFolderIcon(targetFolder);
+                Assert.True(File.Exists(desktopIniPath));
+                Assert.Equal(originalIniContent, File.ReadAllText(desktopIniPath, Encoding.Unicode));
+                Assert.False(File.Exists(Path.Combine(targetFolder, ".ordnericonersteller-state")));
+            }
+            finally
+            {
+                TryDeleteDirectory(targetFolder);
+                TryDeleteDirectory(imageDir);
+            }
+        }
+
         private static void TryDeleteDirectory(string path)
         {
             try

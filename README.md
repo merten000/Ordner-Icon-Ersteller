@@ -1,4 +1,36 @@
-# Ordner-Icon-Ersteller (Version 2.0.3 – komplette Neuentwicklung)
+# Ordner-Icon-Ersteller (Version 2.0.4 – komplette Neuentwicklung)
+
+## Änderungen nach der 4. ChatGPT-Prüfung (v2.0.3 → v2.0.4)
+
+Die Gegenprüfung von v2.0.3 (Commit `0067c3b`) bestätigte alle 4 vorherigen
+Fixes, fand aber 2 neue freigabeblockierende Fehler in `FolderIconService`:
+
+1. **Eine vorhandene Statusdatei wurde beim Setzen nie validiert**: „Icon
+   setzen" prüfte bislang nur `File.Exists(markerPath)` und übersprang bei
+   jeder vorhandenen Datei mit diesem Namen die komplette Sicherungsphase –
+   auch wenn die Datei beschädigt, fremd oder manipuliert war. Dadurch
+   konnten fremde `desktop.ini`/`FolderIcon.ico`-Dateien ohne jede Sicherung
+   überschrieben werden. Jetzt wird ein vorhandener Marker – genau wie beim
+   Entfernen – zwingend mit `ReadMarker()` validiert, inklusive Prüfung,
+   dass alle darin referenzierten Sicherungsdateien tatsächlich existieren.
+   Jede Abweichung bricht sofort ab, bevor irgendetwas verändert wird.
+2. **Ein Fehler mitten in einem zweistufigen Dateitausch wurde vom äußeren
+   Rollback nicht erkannt**: Scheiterte beim Tauschen oder Wiederherstellen
+   der zweite von zwei internen Schritten (nachdem die vorherige Datei
+   bereits erfolgreich beiseite verschoben wurde), setzte die aufrufende
+   Methode ihr „erfolgreich getauscht"-Merkmal nie, wodurch das äußere
+   Rollback genau diesen begonnenen Tausch übersprang – die vorherige Datei
+   landete dann nur noch in einer Sicherungskopie, die anschließend als
+   „nicht mehr benötigt" gelöscht wurde. Die betroffenen Tausch-Bausteine
+   sind jetzt selbst ausnahmesicher: Scheitert der zweite Schritt, holen sie
+   die vorherige Datei sofort selbst zurück, bevor der Fehler weitergegeben
+   wird.
+
+Drei neue automatisierte Tests decken beide Fälle gezielt ab: eine
+beschädigte vorhandene Statusdatei beim Setzen (inkl. fremder Dateien und
+einer strukturell gültigen, aber auf eine fehlende Sicherung verweisenden
+Statusdatei), sowie ein gezielt in der Mitte eines Wiederherstellungs-
+Tauschs erzwungener Fehlschlag beim Entfernen.
 
 ## Änderungen nach der 3. ChatGPT-Prüfung (v2.0.2 → v2.0.3)
 
@@ -222,14 +254,17 @@ Vom Projekt-Hauptordner aus (nicht aus `src\OrdnerIconErsteller`):
 dotnet test
 ```
 
-Das baut Haupt- und Testprojekt und führt die xUnit-Tests aus (13 Tests
+Das baut Haupt- und Testprojekt und führt die xUnit-Tests aus (16 Tests
 insgesamt): der Sicherung/Wiederherstellung-Rundlauf mit exakter
 Attribut-Wiederherstellung, die Fehlerpfadtests aus der 2. ChatGPT-Prüfung
 (Entfernen ohne Statusdatei, fehlgeschlagener Dateitausch, fehlgeschlagene
-Sicherung) sowie die neuen Regressionstests aus der 3. ChatGPT-Prüfung
-(gesperrte Datei beim Entfernen, fehlende zweite Sicherung, beschädigte
-Statusdatei in drei Varianten, fehlgeschlagene Bilderzeugung nach
-erfolgreicher Sicherung, zwei parallele Instanzen auf demselben Ordner).
+Sicherung), die Regressionstests aus der 3. ChatGPT-Prüfung (gesperrte Datei
+beim Entfernen, fehlende zweite Sicherung, beschädigte Statusdatei in drei
+Varianten, fehlgeschlagene Bilderzeugung nach erfolgreicher Sicherung, zwei
+parallele Instanzen auf demselben Ordner) sowie die neuen Regressionstests
+aus der 4. ChatGPT-Prüfung (beschädigte/fremde Statusdatei beim Setzen in
+zwei Varianten, gezielt in der Mitte eines Wiederherstellungs-Tauschs
+erzwungener Fehlschlag).
 
 ## Test-Checkliste vor der ChatGPT-Prüfung
 

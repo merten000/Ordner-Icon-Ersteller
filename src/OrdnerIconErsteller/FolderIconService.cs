@@ -112,6 +112,34 @@ namespace OrdnerIconErsteller
                     throw;
                 }
             }
+            else
+            {
+                // Ein Marker existiert bereits - das kann unser eigener, gültiger Zustand
+                // aus einem früheren "Icon setzen" für diesen Ordner sein (dann DARF nicht
+                // erneut gesichert werden, sonst würde unsere eigene, zwischenzeitlich
+                // gesetzte Version die echte Originalsicherung überschreiben), oder eine
+                // beschädigte/fremde/manipulierte Statusdatei. Deshalb wird er - genau wie
+                // bei "Icon entfernen" - vor jeder Änderung streng validiert, inklusive
+                // Vorhandensein aller darin referenzierten Sicherungsdateien. Jede
+                // Abweichung bricht sofort ab, BEVOR irgendetwas im Zielordner verändert
+                // wird - insbesondere werden dadurch vorhandene fremde Dateien nie
+                // ungesichert überschrieben, nur weil zufällig eine Datei mit dem Namen
+                // der Statusdatei dort liegt.
+                BackupState existingState = ReadMarker(markerPath);
+
+                if (existingState.DesktopIniHasBackup && !File.Exists(iniBackupPath))
+                {
+                    throw new InvalidDataException(
+                        $"Erwartete Sicherungsdatei fehlt: {iniBackupPath}. Aus Sicherheitsgründen wird " +
+                        "nichts verändert - bitte den Ordnerinhalt manuell prüfen.");
+                }
+                if (existingState.IconHasBackup && !File.Exists(icoBackupPath))
+                {
+                    throw new InvalidDataException(
+                        $"Erwartete Sicherungsdatei fehlt: {icoBackupPath}. Aus Sicherheitsgründen wird " +
+                        "nichts verändert - bitte den Ordnerinhalt manuell prüfen.");
+                }
+            }
 
             string tempIco = UniqueTempPath(folderPath, ".ico.tmp");
             string tempIni = UniqueTempPath(folderPath, ".ini.tmp");
@@ -450,12 +478,42 @@ namespace OrdnerIconErsteller
         /// </summary>
         private static void SwapIntoPlace(string targetPath, string newContentPath, string safetyPath)
         {
+            bool movedTargetToSafety = false;
             if (File.Exists(targetPath))
             {
                 File.Move(targetPath, safetyPath, overwrite: true);
+                movedTargetToSafety = true;
             }
 
-            File.Move(newContentPath, targetPath, overwrite: true);
+            try
+            {
+                File.Move(newContentPath, targetPath, overwrite: true);
+            }
+            catch (Exception primary)
+            {
+                // Der zweite Schritt ist fehlgeschlagen. Diese Funktion muss den ersten
+                // Schritt SOFORT selbst rückgängig machen, statt sich auf den Aufrufer zu
+                // verlassen: der setzt sein "geswapt"-Flag erst NACH einem erfolgreichen
+                // Rückgabewert dieser Methode und würde diesen bereits begonnenen, aber
+                // fehlgeschlagenen Tausch sonst nie zurückrollen - die vorherige Datei
+                // wäre dann verloren (nur noch unter dem Safety-Pfad vorhanden).
+                if (movedTargetToSafety)
+                {
+                    try
+                    {
+                        File.Move(safetyPath, targetPath, overwrite: true);
+                    }
+                    catch (Exception undoEx)
+                    {
+                        throw new AggregateException(
+                            $"Der Dateitausch für \"{targetPath}\" ist fehlgeschlagen, und die vorherige " +
+                            $"Datei konnte aus \"{safetyPath}\" nicht automatisch zurückgeholt werden. Die " +
+                            "Datei bleibt dort bewusst erhalten - bitte manuell prüfen.",
+                            new[] { primary, undoEx });
+                    }
+                }
+                throw;
+            }
         }
 
         private static void UndoSwap(string targetPath, string safetyPath)
@@ -478,12 +536,43 @@ namespace OrdnerIconErsteller
         /// </summary>
         private static void SwapFromBackupIntoPlace(string targetPath, string backupPath, string safetyPath)
         {
+            bool movedTargetToSafety = false;
             if (File.Exists(targetPath))
             {
                 File.Move(targetPath, safetyPath, overwrite: true);
+                movedTargetToSafety = true;
             }
 
-            File.Move(backupPath, targetPath, overwrite: true);
+            try
+            {
+                File.Move(backupPath, targetPath, overwrite: true);
+            }
+            catch (Exception primary)
+            {
+                // Wie bei SwapIntoPlace: der zweite Schritt ist fehlgeschlagen, also muss
+                // diese Funktion den ersten Schritt SOFORT selbst rückgängig machen. Der
+                // Aufrufer setzt sein "behandelt"-Flag erst nach einem erfolgreichen
+                // Rückgabewert und würde diesen bereits begonnenen Restore-Versuch sonst
+                // nie zurückrollen - die vorherige (von uns gesetzte) Datei wäre dann nur
+                // noch unter dem Safety-Pfad vorhanden statt an ihrem eigentlichen Platz.
+                if (movedTargetToSafety)
+                {
+                    try
+                    {
+                        File.Move(safetyPath, targetPath, overwrite: true);
+                    }
+                    catch (Exception undoEx)
+                    {
+                        throw new AggregateException(
+                            $"Die Wiederherstellung aus der Sicherung für \"{targetPath}\" ist " +
+                            $"fehlgeschlagen, und die vorherige Datei konnte aus \"{safetyPath}\" nicht " +
+                            "automatisch zurückgeholt werden. Die Datei bleibt dort bewusst erhalten - " +
+                            "bitte manuell prüfen.",
+                            new[] { primary, undoEx });
+                    }
+                }
+                throw;
+            }
         }
 
         private static void UndoSwapFromBackup(string targetPath, string backupPath, string safetyPath)
