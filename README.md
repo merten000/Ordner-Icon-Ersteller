@@ -1,4 +1,37 @@
-# Ordner-Icon-Ersteller (Version 2.0.4 – komplette Neuentwicklung)
+# Ordner-Icon-Ersteller (Version 2.0.5 – komplette Neuentwicklung)
+
+## Änderungen nach der 5. ChatGPT-Prüfung (v2.0.4 → v2.0.5)
+
+Die Gegenprüfung von v2.0.4 (Commit `28c8758`) bestätigte beide vorherigen
+Fixes, fand aber einen seltenen, aber weiterhin datenverlustgefährdenden
+Restfehler:
+
+1. **Safety-Datei konnte gelöscht werden, wenn die Selbstheilung des
+   Dateitauschs SELBST scheitert**: `SwapIntoPlace`/`SwapFromBackupIntoPlace`
+   holen die vorherige Datei bei einem gescheiterten zweiten Schritt zwar
+   selbst zurück – schlägt aber auch dieser Rückhol-Versuch fehl (z. B. weil
+   inzwischen zusätzlich eine Sperre dazukommt), wirft die Hilfsfunktion eine
+   `AggregateException`, BEVOR die aufrufende Methode ihr „getauscht"/
+   „behandelt"-Merkmal setzt. Der äußere Rollback-Code führte deshalb für
+   diese Datei keinen weiteren Schritt aus, und der äußere `finally`-Block
+   löschte anschließend die Safety-Datei als „nicht mehr benötigt" – obwohl
+   sie die einzige verbliebene Kopie der vorherigen Datei war. Behoben durch
+   einen zusätzlichen `out`-Parameter (`safetyPathMustBePreserved`), den die
+   Tausch-Hilfsfunktionen auch beim Werfen einer Ausnahme zuverlässig setzen
+   (C# aktualisiert „out"-Parameter unabhängig vom Kontrollfluss) – der
+   äußere Code wertet dieses Signal jetzt unabhängig von den bisherigen
+   „erfolgreich getauscht"-Merkmalen aus und bewahrt die betroffene
+   Safety-Datei in diesem Fall zuverlässig auf, statt sie zu löschen.
+
+**Bekannte Testabdeckungs-Lücke:** Dieser doppelte Fehlerpfad (zweiter
+Dateitausch-Schritt UND die anschließende interne Selbstheilung scheitern
+beide) lässt sich ohne eine grundlegende Testinfrastruktur-Änderung (z. B.
+eine austauschbare Abstraktion über `File.Move`) nicht zuverlässig und ohne
+zeitbasierte, potenziell instabile Tricks in einem automatisierten Test
+erzwingen. Die Korrektur wurde stattdessen durch sorgfältige Code-Analyse
+verifiziert (der `out`-Parameter wird in jedem Codepfad vor jedem möglichen
+`throw` gesetzt). Diese Lücke ist bewusst dokumentiert statt mit einem
+unzuverlässigen Test „simuliert".
 
 ## Änderungen nach der 4. ChatGPT-Prüfung (v2.0.3 → v2.0.4)
 

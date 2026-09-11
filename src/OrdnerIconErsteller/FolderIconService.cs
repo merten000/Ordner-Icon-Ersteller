@@ -150,6 +150,8 @@ namespace OrdnerIconErsteller
             bool iniSwapped = false;
             bool folderAttrSetByUs = false;
             bool safetyFilesStillNeeded = false;
+            bool icoSafetyMustBePreserved = false;
+            bool iniSafetyMustBePreserved = false;
 
             try
             {
@@ -173,10 +175,10 @@ namespace OrdnerIconErsteller
                     // verwenden Unicode, damit auch Sonderzeichen im Pfad keine Rolle spielen.
                     File.WriteAllText(tempIni, content, Encoding.Unicode);
 
-                    SwapIntoPlace(icoPath, tempIco, icoSafety);
+                    SwapIntoPlace(icoPath, tempIco, icoSafety, out icoSafetyMustBePreserved);
                     icoSwapped = true;
 
-                    SwapIntoPlace(desktopIniPath, tempIni, iniSafety);
+                    SwapIntoPlace(desktopIniPath, tempIni, iniSafety, out iniSafetyMustBePreserved);
                     iniSwapped = true;
 
                     File.SetAttributes(icoPath, FileAttributes.Hidden | FileAttributes.System);
@@ -206,6 +208,11 @@ namespace OrdnerIconErsteller
                         }
                         catch (Exception e) { rollbackErrors.Add(e); }
                     }
+                    // Ein "echtes" Zurückrollen ist hier nur nötig, wenn der jeweilige
+                    // Tausch VOLLSTÄNDIG erfolgreich war (icoSwapped/iniSwapped) - schlug
+                    // er selbst fehl, hat SwapIntoPlace bereits intern versucht, sich
+                    // selbst zu heilen (siehe icoSafetyMustBePreserved/
+                    // iniSafetyMustBePreserved unten).
                     if (iniSwapped)
                     {
                         try { UndoSwap(desktopIniPath, iniSafety); }
@@ -217,7 +224,15 @@ namespace OrdnerIconErsteller
                         catch (Exception e) { rollbackErrors.Add(e); }
                     }
 
-                    if (rollbackErrors.Count > 0)
+                    // Wenn SwapIntoPlace selbst nicht nur fehlgeschlagen ist, sondern auch
+                    // seine eigene Selbstheilung nicht abschließen konnte, MUSS die
+                    // betroffene Safety-Datei erhalten bleiben - unabhängig davon, ob
+                    // icoSwapped/iniSwapped je gesetzt wurden (wurden sie nicht, da der
+                    // Aufruf selbst geworfen hat) und unabhängig von rollbackErrors. Sonst
+                    // würde der äußere finally-Block gleich die einzige verbliebene Kopie
+                    // der vorherigen Datei löschen - genau der von der 5. ChatGPT-Prüfung
+                    // gemeldete Restfehler.
+                    if (rollbackErrors.Count > 0 || icoSafetyMustBePreserved || iniSafetyMustBePreserved)
                     {
                         safetyFilesStillNeeded = true;
                         var all = new List<Exception> { primary };
@@ -319,19 +334,23 @@ namespace OrdnerIconErsteller
             bool icoHandled = false;
             bool folderAttrChanged = false;
             bool safetyFilesStillNeeded = false;
+            bool iniSafetyMustBePreserved = false;
+            bool icoSafetyMustBePreserved = false;
 
             try
             {
                 try
                 {
                     if (state.DesktopIniHasBackup)
-                        SwapFromBackupIntoPlace(desktopIniPath, iniBackupPath, iniRestoreSafety);
+                        SwapFromBackupIntoPlace(desktopIniPath, iniBackupPath, iniRestoreSafety,
+                            out iniSafetyMustBePreserved);
                     else
                         MoveToDeleteSafetyIfExists(desktopIniPath, iniDeleteSafety);
                     iniHandled = true;
 
                     if (state.IconHasBackup)
-                        SwapFromBackupIntoPlace(icoPath, icoBackupPath, icoRestoreSafety);
+                        SwapFromBackupIntoPlace(icoPath, icoBackupPath, icoRestoreSafety,
+                            out icoSafetyMustBePreserved);
                     else
                         MoveToDeleteSafetyIfExists(icoPath, icoDeleteSafety);
                     icoHandled = true;
@@ -401,7 +420,13 @@ namespace OrdnerIconErsteller
                         catch (Exception e) { rollbackErrors.Add(e); }
                     }
 
-                    if (rollbackErrors.Count > 0)
+                    // Wie bei "Icon setzen": scheiterte SwapFromBackupIntoPlace nicht nur,
+                    // sondern konnte auch seine eigene Selbstheilung nicht abschließen,
+                    // MUSS die betroffene Safety-Datei erhalten bleiben - unabhängig davon,
+                    // ob iniHandled/icoHandled je gesetzt wurden und unabhängig von
+                    // rollbackErrors. Sonst würde der äußere finally-Block die einzige
+                    // verbliebene Kopie der vorherigen (von uns gesetzten) Datei löschen.
+                    if (rollbackErrors.Count > 0 || iniSafetyMustBePreserved || icoSafetyMustBePreserved)
                     {
                         safetyFilesStillNeeded = true;
                         var all = new List<Exception> { primary };
@@ -476,8 +501,18 @@ namespace OrdnerIconErsteller
         /// Fehlschlag über <see cref="UndoSwap"/> unverändert (gleiche Bytes, gleiche
         /// Attribute) zurückgeholt werden kann.
         /// </summary>
-        private static void SwapIntoPlace(string targetPath, string newContentPath, string safetyPath)
+        private static void SwapIntoPlace(string targetPath, string newContentPath, string safetyPath,
+            out bool safetyPathMustBePreserved)
         {
+            // WICHTIG: dieser Parameter wird von der aufrufenden Methode auch dann noch
+            // ausgewertet, wenn dieser Aufruf mit einer Ausnahme endet (C# aktualisiert
+            // "out"-Parameter, sobald sie zugewiesen werden - unabhängig davon, ob die
+            // Methode danach normal zurückkehrt oder wirft). Das ist genau der Mechanismus,
+            // mit dem der Aufrufer erfährt, dass diese Sicherungsdatei erhalten bleiben
+            // MUSS, obwohl sein eigenes "geswapt"-Flag (das er erst nach einem erfolgreichen
+            // Rückgabewert setzt) in diesem Fall nie gesetzt wird.
+            safetyPathMustBePreserved = false;
+
             bool movedTargetToSafety = false;
             if (File.Exists(targetPath))
             {
@@ -505,6 +540,12 @@ namespace OrdnerIconErsteller
                     }
                     catch (Exception undoEx)
                     {
+                        // Auch die interne Selbstheilung ist gescheitert: die vorherige
+                        // Datei liegt jetzt NUR NOCH unter safetyPath. Das muss dem
+                        // Aufrufer unabhängig von jeder Flag-Logik verbindlich signalisiert
+                        // werden, damit safetyPath nicht als "nicht mehr benötigt" gelöscht
+                        // wird.
+                        safetyPathMustBePreserved = true;
                         throw new AggregateException(
                             $"Der Dateitausch für \"{targetPath}\" ist fehlgeschlagen, und die vorherige " +
                             $"Datei konnte aus \"{safetyPath}\" nicht automatisch zurückgeholt werden. Die " +
@@ -534,8 +575,13 @@ namespace OrdnerIconErsteller
         /// ihrem ursprünglichen Platz wiederherstellen, nicht nur löschen - siehe
         /// <see cref="UndoSwapFromBackup"/>.
         /// </summary>
-        private static void SwapFromBackupIntoPlace(string targetPath, string backupPath, string safetyPath)
+        private static void SwapFromBackupIntoPlace(string targetPath, string backupPath, string safetyPath,
+            out bool safetyPathMustBePreserved)
         {
+            // Siehe SwapIntoPlace: dieser "out"-Parameter wird vom Aufrufer auch dann noch
+            // ausgewertet, wenn dieser Aufruf mit einer Ausnahme endet.
+            safetyPathMustBePreserved = false;
+
             bool movedTargetToSafety = false;
             if (File.Exists(targetPath))
             {
@@ -563,6 +609,9 @@ namespace OrdnerIconErsteller
                     }
                     catch (Exception undoEx)
                     {
+                        // Auch die interne Selbstheilung ist gescheitert: verbindlich
+                        // signalisieren, dass safetyPath erhalten bleiben MUSS.
+                        safetyPathMustBePreserved = true;
                         throw new AggregateException(
                             $"Die Wiederherstellung aus der Sicherung für \"{targetPath}\" ist " +
                             $"fehlgeschlagen, und die vorherige Datei konnte aus \"{safetyPath}\" nicht " +
