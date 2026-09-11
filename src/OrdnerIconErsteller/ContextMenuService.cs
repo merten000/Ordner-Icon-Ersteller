@@ -25,8 +25,20 @@ namespace OrdnerIconErsteller
             // Konstruktor auf) - im Zweifel gilt der Menüeintrag als "nicht registriert".
             try
             {
-                using var key = Registry.CurrentUser.OpenSubKey(VerbKeyPath);
-                return key != null;
+                string? exePath = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;
+                if (string.IsNullOrEmpty(exePath))
+                    return false;
+
+                using var verbKey = Registry.CurrentUser.OpenSubKey(VerbKeyPath);
+                using var commandKey = verbKey?.OpenSubKey("command");
+                string? command = commandKey?.GetValue("") as string;
+
+                // Nicht nur die Existenz des Schlüssels prüfen, sondern auch, ob der
+                // hinterlegte Befehl tatsächlich noch auf die aktuelle EXE verweist.
+                // Sonst gilt ein veralteter Eintrag (z.B. nach Verschieben der EXE)
+                // fälschlich als "registriert".
+                return !string.IsNullOrEmpty(command)
+                    && command.IndexOf(exePath, StringComparison.OrdinalIgnoreCase) >= 0;
             }
             catch
             {

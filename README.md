@@ -1,4 +1,51 @@
-# Ordner-Icon-Ersteller (Version 2.0.1 – komplette Neuentwicklung)
+# Ordner-Icon-Ersteller (Version 2.0.2 – komplette Neuentwicklung)
+
+## Änderungen nach der 2. ChatGPT-Prüfung (v2.0.1 → v2.0.2)
+
+Die Gegenprüfung von v2.0.1 (Commit `c44156d`) hat bestätigt, dass die
+`desktop.ini`-Kodierung jetzt korrekt ist, aber vier weitere freigabeblockierende
+Fehler in `FolderIconService` gefunden, die sich alle um denselben Kernpunkt
+drehen: der behauptete Sicherungs-/Rollback-Schutz griff in der Praxis noch
+nicht vollständig. Alle vier sind jetzt behoben:
+
+1. **„Icon entfernen" konnte fremde Dateien löschen**: In einem Ordner, den das
+   Programm nie bearbeitet hat, löschte „Icon entfernen" trotzdem eine
+   zufällig vorhandene fremde `desktop.ini`/`FolderIcon.ico`. Jetzt prüft
+   `RemoveFolderIcon` zuerst zwingend, ob eine von diesem Programm angelegte
+   Statusdatei existiert – fehlt sie, wird **gar nichts** verändert und eine
+   klare Fehlermeldung angezeigt.
+2. **Das Einsetzen war nicht atomar**: `File.Copy(..., overwrite: true)` kann
+   mittendrin abbrechen und eine gekürzte Datei hinterlassen. Jetzt werden
+   neue Dateien über `File.Move` (Umbenennen statt Kopieren) eingesetzt – auf
+   demselben Laufwerk ein einziger, praktisch unteilbarer Schritt. Schlägt
+   einer von zwei nötigen Tauschvorgängen fehl, wird der bereits erfolgte
+   zurückgerollt, sodass nie ein halbfertiger Zustand zurückbleibt.
+3. **Die wiederhergestellten Dateien verloren ihre echten Attribute**: Beim
+   Entfernen wurden Dateien bisher pauschal auf `Hidden|System` gesetzt statt
+   auf ihre tatsächlichen ursprünglichen Attribute. Die echten Attribute
+   werden jetzt exakt in der Statusdatei gespeichert und beim Entfernen exakt
+   wiederhergestellt.
+4. **Ein Fehler bei der Sicherung selbst konnte die Originaldatei verändern**:
+   Bisher wurden die Attribute der Originaldatei entfernt, bevor die Sicherung
+   überhaupt angelegt war – schlug das Kopieren fehl, blieb die Originaldatei
+   in verändertem Zustand zurück. Jetzt wird die Originaldatei zu keinem
+   Zeitpunkt angefasst; erst wenn die Sicherungskopie vollständig und sicher
+   an ihrem endgültigen Platz liegt, gilt der Vorgang als abgeschlossen.
+
+Außerdem wurden die in der Prüfung genannten kleineren Punkte behoben: die
+Kontextmenü-Statusprüfung (`ContextMenuService.IsRegistered`) erkennt jetzt
+auch einen veralteten Eintrag (z. B. nach Verschieben der EXE) korrekt als
+„nicht registriert", und die README-Formulierung zur alten Version wurde
+neutraler beschrieben (siehe unten). Fünf neue automatisierte Tests decken
+gezielt die gemeldeten Fehlerpfade ab (Entfernen ohne Statusdatei, fehlgeschlagener
+Tausch, fehlgeschlagene Sicherung).
+
+**Offen, bewusst zurückgestellt (kein Blocker laut Prüfbericht):** Beim Setzen
+eines neuen Icons wird eine vorhandene `desktop.ini` komplett ersetzt statt nur
+die Icon-Schlüssel darin gezielt zu ändern. Andere, unabhängig von diesem
+Programm gesetzte Shell-Anpassungen in derselben Datei blieben dadurch bis zum
+Entfernen unwirksam (der Inhalt wird aber weiterhin vollständig gesichert und
+später exakt wiederhergestellt – es geht nichts verloren).
 
 ## Änderungen nach der 1. ChatGPT-Prüfung (v2.0.0 → v2.0.1)
 
@@ -32,10 +79,11 @@ mit dem Ziel, die Antivirus-Fehlalarme der Vorversion nicht zu wiederholen.
 
 ## Warum die alte Version Ärger gemacht hat
 
-Laut Notion-Eintrag hat die alte Setup.exe versucht, Sicherheitsfunktionen per
-CMD zu umgehen – genau das Muster, das Virenscanner zuverlässig als verdächtig
-einstufen (externe `cmd.exe`/`powershell.exe`/`reg.exe`-Aufrufe, Registry-Änderungen
-über Subprozesse, ggf. Admin-Rechte-Anforderung).
+Die alte Setup.exe rief zur Installation externe Prozesse wie `cmd.exe`,
+`powershell.exe` und `reg.exe` auf und nahm Registry-Änderungen über solche
+Subprozesse vor, teilweise mit Anforderung von Admin-Rechten. Unabhängig von
+der tatsächlichen Absicht ist genau das ein Muster, das Virenscanner
+zuverlässig als verdächtig einstufen.
 
 ## Was in dieser Version bewusst anders ist
 
@@ -117,8 +165,10 @@ Vom Projekt-Hauptordner aus (nicht aus `src\OrdnerIconErsteller`):
 dotnet test
 ```
 
-Das baut Haupt- und Testprojekt und führt die xUnit-Tests aus (u. a. der in
-Punkt 2 oben beschriebene Sicherung/Wiederherstellung-Rundlauf).
+Das baut Haupt- und Testprojekt und führt die xUnit-Tests aus (5 Tests, u. a.
+der Sicherung/Wiederherstellung-Rundlauf mit exakter Attribut-Wiederherstellung
+sowie die drei neuen Fehlerpfadtests aus der 2. ChatGPT-Prüfung: Entfernen ohne
+Statusdatei, fehlgeschlagener Dateitausch, fehlgeschlagene Sicherung).
 
 ## Test-Checkliste vor der ChatGPT-Prüfung
 

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -10,6 +11,24 @@ namespace OrdnerIconErsteller
     /// Windows vorgesehenen Standardmechanismus (desktop.ini + Icon-Datei
     /// im Ordner selbst). Keine Registry-"Hacks", keine Systemdateien
     /// außerhalb des Zielordners, keine externen Prozesse.
+    ///
+    /// Sicherheitsprinzipien (nach der 2. ChatGPT-Prüfung von v2.0.1):
+    /// - Ein bereits vorhandener, fremder Zustand wird nur gesichert, nie durch
+    ///   bloßes Ändern von Attributen an der Originaldatei "vorbereitet". Die
+    ///   Originaldatei bleibt unangetastet, bis eine vollständige Sicherung an
+    ///   ihrem endgültigen Platz liegt.
+    /// - Jeder Dateiaustausch im Zielordner geschieht über <see cref="File.Move"/>
+    ///   (Umbenennen), nicht über Copy-Overwrite - das ist auf demselben Volume
+    ///   ein einziger, praktisch unteilbarer Schritt statt eines kopierten
+    ///   Bytestroms, der mittendrin abbrechen kann.
+    /// - Schlägt irgendein Schritt fehl, werden alle in diesem Aufruf bereits
+    ///   vorgenommenen Änderungen in umgekehrter Reihenfolge zurückgerollt.
+    /// - "Icon entfernen" verändert nur Ordner, für die eine von diesem Programm
+    ///   angelegte Statusdatei existiert. Ohne diese Statusdatei wird nichts
+    ///   gelöscht oder überschrieben.
+    /// - Die ursprünglichen Datei-Attribute werden exakt gespeichert und beim
+    ///   Entfernen exakt wiederhergestellt, statt pauschal auf Hidden/System
+    ///   zurückgesetzt zu werden.
     /// </summary>
     internal static class FolderIconService
     {
@@ -20,10 +39,10 @@ namespace OrdnerIconErsteller
 
         /// <summary>
         /// Setzt das Ordner-Icon. Vorhandene desktop.ini/Icon-Datei/Ordnerattribute
-        /// werden vor der ersten Änderung gesichert (siehe <see cref="RemoveFolderIcon"/>),
-        /// und die eigentlichen Dateien werden erst über temporäre Dateien geschrieben
-        /// und dann per Copy-Overwrite eingesetzt, damit bei einem Fehler mittendrin
-        /// kein halbfertiger Zustand im Zielordner zurückbleibt.
+        /// werden vor der ersten Änderung gesichert (siehe <see cref="RemoveFolderIcon"/>).
+        /// Die eigentlichen Dateien werden über temporäre Dateien im Zielordner
+        /// vorbereitet und dann per atomarem Umbenennen eingesetzt; schlägt dabei
+        /// etwas fehl, wird der komplette Aufruf zurückgerollt.
         /// </summary>
         public static void SetFolderIcon(string folderPath, string sourceImagePath)
         {
@@ -38,19 +57,51 @@ namespace OrdnerIconErsteller
             string icoBackupPath = icoPath + BackupSuffix;
             string iniBackupPath = desktopIniPath + BackupSuffix;
 
+            bool markerExistedBefore = File.Exists(markerPath);
+            bool createdBackupsThisCall = false;
+
             // Nur beim allerersten Aufruf für diesen Ordner den Ursprungszustand sichern -
             // ein zweites "Icon setzen" darf nicht die (schon einmal gesicherte) Originaldatei
             // mit unserer eigenen, zwischenzeitlich gesetzten Version überschreiben.
-            if (!File.Exists(markerPath))
+            if (!markerExistedBefore)
             {
-                bool hadReadOnly = (new DirectoryInfo(folderPath).Attributes & FileAttributes.ReadOnly) != 0;
-                BackupIfExists(desktopIniPath, iniBackupPath);
-                BackupIfExists(icoPath, icoBackupPath);
-                WriteMarker(markerPath, hadReadOnly);
+                bool folderHadReadOnly = (new DirectoryInfo(folderPath).Attributes & FileAttributes.ReadOnly) != 0;
+                try
+                {
+                    bool iniHasBackup = BackupIfExists(desktopIniPath, iniBackupPath, out int iniAttributes);
+                    bool icoHasBackup = BackupIfExists(icoPath, icoBackupPath, out int icoAttributes);
+
+                    WriteMarker(markerPath, new BackupState
+                    {
+                        FolderHadReadOnly = folderHadReadOnly,
+                        DesktopIniHasBackup = iniHasBackup,
+                        DesktopIniAttributes = iniAttributes,
+                        IconHasBackup = icoHasBackup,
+                        IconAttributes = icoAttributes,
+                    });
+                    createdBackupsThisCall = true;
+                }
+                catch
+                {
+                    // Die Sicherung ist fehlgeschlagen. BackupIfExists fasst die
+                    // Originaldatei nie an, bevor die Sicherungskopie an ihrem
+                    // endgültigen Platz liegt - deshalb genügt es hier, eventuell
+                    // schon angelegte (unvollständige) Sicherungsdateien wieder zu
+                    // entfernen, damit kein halbfertiger Zustand zurückbleibt.
+                    TryDelete(iniBackupPath);
+                    TryDelete(icoBackupPath);
+                    TryDelete(markerPath);
+                    throw;
+                }
             }
 
-            string tempIco = icoPath + ".tmp";
-            string tempIni = desktopIniPath + ".tmp";
+            string tempIco = UniqueTempPath(folderPath, ".ico.tmp");
+            string tempIni = UniqueTempPath(folderPath, ".ini.tmp");
+            string icoSafety = UniqueTempPath(folderPath, ".ico.safety");
+            string iniSafety = UniqueTempPath(folderPath, ".ini.safety");
+
+            bool icoSwapped = false;
+            bool iniSwapped = false;
             try
             {
                 IconWriter.CreateIcoFromImage(sourceImagePath, tempIco);
@@ -68,11 +119,34 @@ namespace OrdnerIconErsteller
                 // verwenden Unicode, damit auch Sonderzeichen im Pfad keine Rolle spielen.
                 File.WriteAllText(tempIni, content, Encoding.Unicode);
 
-                ClearAttributesIfExists(icoPath);
-                ClearAttributesIfExists(desktopIniPath);
+                try
+                {
+                    SwapIntoPlace(icoPath, tempIco, icoSafety);
+                    icoSwapped = true;
 
-                File.Copy(tempIco, icoPath, overwrite: true);
-                File.Copy(tempIni, desktopIniPath, overwrite: true);
+                    SwapIntoPlace(desktopIniPath, tempIni, iniSafety);
+                    iniSwapped = true;
+                }
+                catch
+                {
+                    // Mindestens einer der beiden Tauschvorgänge ist fehlgeschlagen (z.B.
+                    // weil am Zielpfad bereits ein gleichnamiger Ordner liegt). Alle in
+                    // diesem Aufruf bereits vorgenommenen Änderungen in umgekehrter
+                    // Reihenfolge zurückrollen, damit kein halbfertiger Zustand zurückbleibt.
+                    if (iniSwapped)
+                        UndoSwap(desktopIniPath, iniSafety);
+                    if (icoSwapped)
+                        UndoSwap(icoPath, icoSafety);
+
+                    if (createdBackupsThisCall)
+                    {
+                        ClearAttributesIfExists(markerPath);
+                        TryDelete(markerPath);
+                        TryDelete(iniBackupPath);
+                        TryDelete(icoBackupPath);
+                    }
+                    throw;
+                }
 
                 File.SetAttributes(icoPath, FileAttributes.Hidden | FileAttributes.System);
                 File.SetAttributes(desktopIniPath, FileAttributes.Hidden | FileAttributes.System);
@@ -88,13 +162,19 @@ namespace OrdnerIconErsteller
             {
                 TryDelete(tempIco);
                 TryDelete(tempIni);
+                TryDelete(icoSafety);
+                TryDelete(iniSafety);
             }
         }
 
         /// <summary>
-        /// Entfernt das von diesem Programm gesetzte Ordner-Icon wieder. War vor dem
-        /// ersten "Icon setzen" bereits eine eigene desktop.ini/Icon-Datei vorhanden,
-        /// wird genau die wiederhergestellt statt nur gelöscht.
+        /// Entfernt das von diesem Programm gesetzte Ordner-Icon wieder. Das geschieht
+        /// ausschließlich anhand der Statusdatei, die beim ersten "Icon setzen" für
+        /// diesen Ordner angelegt wurde - ohne diese Statusdatei wird nichts verändert,
+        /// damit ein nie von diesem Programm bearbeiteter Ordner niemals versehentlich
+        /// fremde Dateien verliert. War vor dem ersten "Icon setzen" bereits eine eigene
+        /// desktop.ini/Icon-Datei vorhanden, wird genau diese inklusive der ursprünglichen
+        /// Datei-Attribute wiederhergestellt statt nur gelöscht.
         /// </summary>
         public static void RemoveFolderIcon(string folderPath)
         {
@@ -107,71 +187,212 @@ namespace OrdnerIconErsteller
             string icoBackupPath = icoPath + BackupSuffix;
             string iniBackupPath = desktopIniPath + BackupSuffix;
 
-            bool markerExists = File.Exists(markerPath);
-            bool hadReadOnlyBeforeUs = markerExists && ReadMarkerHadReadOnly(markerPath);
-
-            RestoreOrDelete(icoPath, icoBackupPath);
-            RestoreOrDelete(desktopIniPath, iniBackupPath);
-
-            if (markerExists)
+            if (!File.Exists(markerPath))
             {
-                ClearAttributesIfExists(markerPath);
-                TryDelete(markerPath);
+                throw new InvalidOperationException(
+                    "Für diesen Ordner wurde keine von Ordner-Icon-Ersteller gesetzte Anpassung " +
+                    "gefunden. Es wurde nichts verändert.");
             }
+
+            BackupState state = ReadMarker(markerPath);
+
+            RestoreFile(desktopIniPath, iniBackupPath, state.DesktopIniHasBackup, state.DesktopIniAttributes);
+            RestoreFile(icoPath, icoBackupPath, state.IconHasBackup, state.IconAttributes);
 
             var dirInfo = new DirectoryInfo(folderPath);
-            if (!hadReadOnlyBeforeUs)
-            {
+            if (state.FolderHadReadOnly)
+                dirInfo.Attributes |= FileAttributes.ReadOnly;
+            else
                 dirInfo.Attributes &= ~FileAttributes.ReadOnly;
-            }
-            // War der Ordner schon vor uns "angepasst" (ReadOnly-Bit gesetzt), lassen wir
-            // das Attribut unangetastet, statt fremde Anpassungen zu zerstören.
+
+            ClearAttributesIfExists(markerPath);
+            TryDelete(markerPath);
 
             RefreshShellIcon(folderPath);
         }
 
-        private static void RestoreOrDelete(string currentPath, string backupPath)
+        // --- Austausch einzelner Dateien: atomar + zurückrollbar ---
+
+        /// <summary>
+        /// Ersetzt <paramref name="targetPath"/> durch <paramref name="newContentPath"/>.
+        /// Eine vorhandene Zieldatei wird zuerst per <see cref="File.Move"/> (nicht
+        /// kopiert) nach <paramref name="safetyPath"/> verschoben, damit sie bei einem
+        /// Fehlschlag über <see cref="UndoSwap"/> unverändert (gleiche Bytes, gleiche
+        /// Attribute) zurückgeholt werden kann.
+        /// </summary>
+        private static void SwapIntoPlace(string targetPath, string newContentPath, string safetyPath)
         {
-            ClearAttributesIfExists(currentPath);
-            if (File.Exists(backupPath))
+            if (File.Exists(targetPath))
             {
+                File.Move(targetPath, safetyPath, overwrite: true);
+            }
+
+            File.Move(newContentPath, targetPath, overwrite: true);
+        }
+
+        private static void UndoSwap(string targetPath, string safetyPath)
+        {
+            TryDelete(targetPath);
+            if (File.Exists(safetyPath))
+            {
+                File.Move(safetyPath, targetPath, overwrite: true);
+            }
+        }
+
+        private static void RestoreFile(string currentPath, string backupPath, bool hasBackup, int originalAttributes)
+        {
+            if (hasBackup)
+            {
+                if (!File.Exists(backupPath))
+                {
+                    throw new InvalidDataException(
+                        $"Die erwartete Sicherungsdatei fehlt: {backupPath}. Aus Sicherheitsgründen " +
+                        "wird nichts gelöscht - bitte den Ordnerinhalt manuell prüfen.");
+                }
+
                 ClearAttributesIfExists(backupPath);
-                File.Copy(backupPath, currentPath, overwrite: true);
-                File.SetAttributes(currentPath, FileAttributes.Hidden | FileAttributes.System);
-                TryDelete(backupPath);
+                // Atomarer Tausch statt Copy+Overwrite: die Sicherung ersetzt die aktuelle
+                // (von uns gesetzte) Datei in einem einzigen Schritt.
+                File.Move(backupPath, currentPath, overwrite: true);
+                File.SetAttributes(currentPath, (FileAttributes)originalAttributes);
             }
-            else if (File.Exists(currentPath))
+            else
             {
-                File.Delete(currentPath);
-            }
-        }
-
-        private static void BackupIfExists(string path, string backupPath)
-        {
-            if (File.Exists(path))
-            {
-                ClearAttributesIfExists(path);
-                File.Copy(path, backupPath, overwrite: true);
-                File.SetAttributes(backupPath, FileAttributes.Hidden | FileAttributes.System);
+                // Der Ordner besaß vor dem ersten "Icon setzen" keine solche Datei -
+                // also gehört sie uns, und wir dürfen sie entfernen.
+                TryDelete(currentPath);
             }
         }
 
-        private static void WriteMarker(string markerPath, bool hadReadOnly)
+        // --- Sicherung des Ursprungszustands ---
+
+        private sealed class BackupState
         {
-            File.WriteAllText(markerPath, hadReadOnly ? "HadReadOnly=1" : "HadReadOnly=0", Encoding.ASCII);
-            File.SetAttributes(markerPath, FileAttributes.Hidden | FileAttributes.System);
+            public bool FolderHadReadOnly;
+            public bool DesktopIniHasBackup;
+            public int DesktopIniAttributes;
+            public bool IconHasBackup;
+            public int IconAttributes;
         }
 
-        private static bool ReadMarkerHadReadOnly(string markerPath)
+        /// <summary>
+        /// Sichert <paramref name="sourcePath"/> nach <paramref name="finalBackupPath"/>,
+        /// falls die Datei existiert. Die Originaldatei wird dabei zu keinem Zeitpunkt
+        /// verändert (keine Attribute werden vor dem Kopieren entfernt) - schlägt die
+        /// Sicherung fehl, ist von der Originaldatei nichts betroffen.
+        /// </summary>
+        private static bool BackupIfExists(string sourcePath, string finalBackupPath, out int originalAttributes)
         {
-            try
+            if (!File.Exists(sourcePath))
             {
-                return File.ReadAllText(markerPath).Contains("HadReadOnly=1");
-            }
-            catch
-            {
+                originalAttributes = 0;
                 return false;
             }
+
+            originalAttributes = (int)File.GetAttributes(sourcePath);
+
+            string tempBackup = UniqueTempPath(Path.GetDirectoryName(finalBackupPath) ?? ".", ".bak.tmp");
+            try
+            {
+                File.Copy(sourcePath, tempBackup, overwrite: false);
+                File.SetAttributes(tempBackup, FileAttributes.Normal);
+
+                if (File.Exists(finalBackupPath))
+                {
+                    ClearAttributesIfExists(finalBackupPath);
+                    File.Delete(finalBackupPath);
+                }
+
+                // Letzter Schritt ist ein Umbenennen (kein Copy) - das ist auf demselben
+                // Volume praktisch unteilbar.
+                File.Move(tempBackup, finalBackupPath);
+                File.SetAttributes(finalBackupPath, FileAttributes.Hidden | FileAttributes.System);
+                return true;
+            }
+            finally
+            {
+                TryDelete(tempBackup);
+            }
+        }
+
+        private static void WriteMarker(string markerPath, BackupState state)
+        {
+            string content =
+                "FormatVersion=2" + Environment.NewLine +
+                "FolderHadReadOnly=" + (state.FolderHadReadOnly ? "1" : "0") + Environment.NewLine +
+                "DesktopIni.HasBackup=" + (state.DesktopIniHasBackup ? "1" : "0") + Environment.NewLine +
+                "DesktopIni.Attributes=" + state.DesktopIniAttributes + Environment.NewLine +
+                "Icon.HasBackup=" + (state.IconHasBackup ? "1" : "0") + Environment.NewLine +
+                "Icon.Attributes=" + state.IconAttributes + Environment.NewLine;
+
+            string tempMarker = UniqueTempPath(Path.GetDirectoryName(markerPath) ?? ".", ".marker.tmp");
+            File.WriteAllText(tempMarker, content, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+            try
+            {
+                if (File.Exists(markerPath))
+                {
+                    ClearAttributesIfExists(markerPath);
+                    File.Delete(markerPath);
+                }
+                File.Move(tempMarker, markerPath);
+                File.SetAttributes(markerPath, FileAttributes.Hidden | FileAttributes.System);
+            }
+            finally
+            {
+                TryDelete(tempMarker);
+            }
+        }
+
+        /// <summary>
+        /// Liest die Statusdatei robust ein. Fehlt sie, ist sie unlesbar oder
+        /// unvollständig/beschädigt, wird bewusst eine Ausnahme geworfen statt zu
+        /// raten - damit im Zweifel nichts automatisch gelöscht oder überschrieben wird.
+        /// </summary>
+        private static BackupState ReadMarker(string markerPath)
+        {
+            string[] lines;
+            try
+            {
+                lines = File.ReadAllLines(markerPath);
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidDataException(
+                    $"Statusdatei konnte nicht gelesen werden: {markerPath}", ex);
+            }
+
+            var values = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (string line in lines)
+            {
+                int separatorIndex = line.IndexOf('=');
+                if (separatorIndex > 0)
+                {
+                    values[line[..separatorIndex]] = line[(separatorIndex + 1)..];
+                }
+            }
+
+            try
+            {
+                return new BackupState
+                {
+                    FolderHadReadOnly = values["FolderHadReadOnly"] == "1",
+                    DesktopIniHasBackup = values["DesktopIni.HasBackup"] == "1",
+                    DesktopIniAttributes = int.Parse(values["DesktopIni.Attributes"]),
+                    IconHasBackup = values["Icon.HasBackup"] == "1",
+                    IconAttributes = int.Parse(values["Icon.Attributes"]),
+                };
+            }
+            catch (Exception ex) when (ex is KeyNotFoundException or FormatException)
+            {
+                throw new InvalidDataException(
+                    $"Statusdatei ist unvollständig oder beschädigt: {markerPath}. Aus " +
+                    "Sicherheitsgründen wird nichts automatisch gelöscht oder wiederhergestellt.", ex);
+            }
+        }
+
+        private static string UniqueTempPath(string folderPath, string suffix)
+        {
+            return Path.Combine(folderPath, "." + Guid.NewGuid().ToString("N") + suffix);
         }
 
         private static void ClearAttributesIfExists(string path)
