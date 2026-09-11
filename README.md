@@ -1,4 +1,28 @@
-# Ordner-Icon-Ersteller (Version 2.0.0 – komplette Neuentwicklung)
+# Ordner-Icon-Ersteller (Version 2.0.1 – komplette Neuentwicklung)
+
+## Änderungen nach der 1. ChatGPT-Prüfung (v2.0.0 → v2.0.1)
+
+ChatGPT hat drei freigabeblockierende Fehler in v2.0.0 (Commit `f9a1f0e`) gefunden,
+alle sind jetzt behoben:
+
+1. **`desktop.ini` wurde nicht erkannt**: sie wurde als UTF-8 geschrieben, die
+   klassische Windows-INI-API (`GetPrivateProfileString`) erkennt UTF-8 aber
+   nicht zuverlässig. Jetzt wird Unicode (UTF-16LE mit BOM) verwendet.
+2. **Vorhandene `desktop.ini`/`FolderIcon.ico`/Ordnerattribute wurden ohne
+   Sicherung überschrieben**: `FolderIconService` sichert jetzt vor der
+   allerersten Änderung an einem Ordner dessen Originalzustand (versteckte
+   `.bak`-Dateien + ein kleines Marker-File) und stellt beim „Icon entfernen"
+   genau diesen Originalzustand wieder her, statt einfach zu löschen.
+3. **Kein Rollback bei Schreibfehlern**: Icon und `desktop.ini` werden jetzt
+   erst vollständig in temporäre Dateien geschrieben und erst danach an ihren
+   endgültigen Platz kopiert, damit bei einem Fehler mittendrin kein
+   halbfertiger Zustand im Zielordner zurückbleibt.
+
+Außerdem: die Registry-Statusabfrage (`ContextMenuService.IsRegistered`) kann
+jetzt nicht mehr den Programmstart abbrechen (try/catch ergänzt), die zwei
+unnötigen NuGet-Pakete (`System.Drawing.Common`, `Microsoft.Win32.Registry` –
+beide bereits über das Windows-Desktop-Framework verfügbar) wurden entfernt,
+und es gibt jetzt ein Testprojekt mit automatisierten Tests (siehe unten).
 
 Windows-Tool, um einem Ordner per eigenem Bild ein individuelles Icon zu geben,
 inklusive Eintrag im Explorer-Rechtsklick-Menü.
@@ -44,14 +68,19 @@ KI-generierte Icons, automatischer Icon-Vorschlag, fertiger Installer/Setup.exe.
 
 ```
 OrdnerIconErsteller/
-└── src/
-    └── OrdnerIconErsteller/
-        ├── OrdnerIconErsteller.csproj
-        ├── Program.cs
-        ├── MainForm.cs
-        ├── FolderIconService.cs
-        ├── IconWriter.cs
-        └── ContextMenuService.cs
+├── src/
+│   └── OrdnerIconErsteller/
+│       ├── OrdnerIconErsteller.csproj
+│       ├── Program.cs
+│       ├── MainForm.cs
+│       ├── FolderIconService.cs
+│       ├── IconWriter.cs
+│       └── ContextMenuService.cs
+└── tests/
+    └── OrdnerIconErsteller.Tests/
+        ├── OrdnerIconErsteller.Tests.csproj
+        ├── IconWriterTests.cs
+        └── FolderIconServiceTests.cs
 ```
 
 ## Bauen (auf deinem Windows-PC, .NET 8 SDK vorausgesetzt)
@@ -68,6 +97,9 @@ cd src\OrdnerIconErsteller
 dotnet build
 ```
 
+(Es gibt jetzt auch `OrdnerIconErsteller.sln` im Hauptordner - `dotnet build`
+direkt dort baut Haupt- und Testprojekt zusammen.)
+
 Fertige, startbare EXE erzeugen (einzelne Datei, keine separate .NET-Installation
 beim Nutzer nötig):
 
@@ -76,6 +108,17 @@ dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=
 ```
 
 Die EXE liegt danach unter `src\OrdnerIconErsteller\publish\OrdnerIconErsteller.exe`.
+
+## Automatisierte Tests ausführen
+
+Vom Projekt-Hauptordner aus (nicht aus `src\OrdnerIconErsteller`):
+
+```powershell
+dotnet test
+```
+
+Das baut Haupt- und Testprojekt und führt die xUnit-Tests aus (u. a. der in
+Punkt 2 oben beschriebene Sicherung/Wiederherstellung-Rundlauf).
 
 ## Test-Checkliste vor der ChatGPT-Prüfung
 

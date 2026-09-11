@@ -20,8 +20,18 @@ namespace OrdnerIconErsteller
 
         public static bool IsRegistered()
         {
-            using var key = Registry.CurrentUser.OpenSubKey(VerbKeyPath);
-            return key != null;
+            // Absichtlich robust: ein Registry-Lesefehler hier darf niemals den
+            // Programmstart abbrechen (das rief RefreshMenuStatus() im MainForm-
+            // Konstruktor auf) - im Zweifel gilt der Menüeintrag als "nicht registriert".
+            try
+            {
+                using var key = Registry.CurrentUser.OpenSubKey(VerbKeyPath);
+                return key != null;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         public static void Register()
