@@ -1,4 +1,61 @@
-# Ordner-Icon-Ersteller (Version 2.0.2 – komplette Neuentwicklung)
+# Ordner-Icon-Ersteller (Version 2.0.3 – komplette Neuentwicklung)
+
+## Änderungen nach der 3. ChatGPT-Prüfung (v2.0.2 → v2.0.3)
+
+Die Gegenprüfung von v2.0.2 (Commit `491544b`) hat bestätigt, dass die vier
+vorherigen Fixes für ihre jeweiligen Reproduktionsfälle funktionieren, aber
+vier neue freigabeblockierende Fehler gefunden – alle rund um die
+Vollständigkeit der Transaktion und der Zustandsprüfung. `FolderIconService`
+wurde daraufhin grundlegend überarbeitet:
+
+1. **Ein Löschfehler beim Entfernen konnte stillschweigend als Erfolg
+   gelten**: War z. B. eine Datei gerade exklusiv gesperrt, wurde das
+   frühere `TryDelete` den Fehler verschlucken. Löschungen laufen jetzt über
+   reversible „Verschieben statt Löschen"-Bausteine
+   (`MoveToDeleteSafetyIfExists`/`UndoMoveToDeleteSafety`); ein Fehlschlag
+   wird nicht mehr abgefangen, sondern wirft sichtbar und lässt den Ordner
+   unverändert – der Vorgang bleibt danach wiederholbar.
+2. **„Icon entfernen" war nicht transaktional**: bisher wurde z. B. die
+   desktop.ini bereits wiederhergestellt (und ihre Sicherung dabei
+   „verbraucht"), bevor geprüft wurde, ob auch die zweite Sicherung (Icon)
+   überhaupt existiert. Jetzt prüft eine Vorabkontrolle zwingend, dass ALLE
+   laut Statusdatei nötigen Sicherungsdateien vorhanden sind, bevor
+   überhaupt irgendetwas verändert wird.
+3. **Eine beschädigte oder manipulierte Statusdatei wurde unbesehen
+   akzeptiert**: Jetzt wird die Formatversion exakt geprüft, boolesche Werte
+   müssen exakt `"0"`/`"1"` sein (kein stiller `false`-Fallback), und
+   Attribut-Werte werden gegen eine Whitelist plausibler `FileAttributes`
+   geprüft – jede Abweichung bricht kontrolliert ab, ohne etwas zu
+   verändern.
+4. **Das Zurückrollen bei „Icon setzen" deckte nicht alle Schritte ab**:
+   Bilderzeugung, das Schreiben der desktop.ini, beide Dateitausche und
+   beide Attributänderungen laufen jetzt als EINE zusammenhängende
+   Transaktion mit vollständigem, in umgekehrter Reihenfolge ablaufendem
+   Rollback bei jedem Fehlschlag – nicht nur bei einem fehlgeschlagenen
+   Dateitausch.
+5. **Zwei gleichzeitig gestartete Instanzen konnten sich gegenseitig
+   Sicherung/Zustand zerstören** (z. B. über zwei Rechtsklick-Menü-Aufrufe
+   kurz hintereinander): Pro Ordner wird jetzt während „Icon setzen"/„Icon
+   entfernen" eine eigene Sperrdatei exklusiv gehalten; eine zweite Instanz
+   erhält sofort einen klaren Fehler statt loszulaufen.
+
+Schlägt das automatische Zurückrollen selbst fehl (z. B. weil eine Datei
+gerade zusätzlich gesperrt ist), werden die dafür nötigen Sicherungskopien
+jetzt bewusst NICHT gelöscht – der Fehler benennt das explizit und weist auf
+eine manuelle Prüfung hin, statt Datenverlust zu riskieren
+(`System.AggregateException`).
+
+Sieben neue automatisierte Tests decken die aus dem Prüfbericht geforderten
+Regressionsfälle ab: gesperrte Datei beim Entfernen, fehlende zweite
+Sicherung, beschädigte Statusdatei (falsche Formatversion, ungültiger
+boolescher Wert, unzulässige Attribut-Bits), fehlgeschlagene Bilderzeugung
+nach bereits erfolgreicher Sicherung, sowie zwei parallel gestartete
+Instanzen auf demselben Ordner.
+
+Außerdem behoben: die Kontextmenü-Statusprüfung
+(`ContextMenuService.IsRegistered`) vergleicht den hinterlegten Befehl jetzt
+exakt statt nur als Teilstring, damit ein fremder Befehl, der den EXE-Pfad
+zufällig irgendwo enthält, nicht fälschlich als „registriert" gilt.
 
 ## Änderungen nach der 2. ChatGPT-Prüfung (v2.0.1 → v2.0.2)
 
@@ -165,10 +222,14 @@ Vom Projekt-Hauptordner aus (nicht aus `src\OrdnerIconErsteller`):
 dotnet test
 ```
 
-Das baut Haupt- und Testprojekt und führt die xUnit-Tests aus (5 Tests, u. a.
-der Sicherung/Wiederherstellung-Rundlauf mit exakter Attribut-Wiederherstellung
-sowie die drei neuen Fehlerpfadtests aus der 2. ChatGPT-Prüfung: Entfernen ohne
-Statusdatei, fehlgeschlagener Dateitausch, fehlgeschlagene Sicherung).
+Das baut Haupt- und Testprojekt und führt die xUnit-Tests aus (13 Tests
+insgesamt): der Sicherung/Wiederherstellung-Rundlauf mit exakter
+Attribut-Wiederherstellung, die Fehlerpfadtests aus der 2. ChatGPT-Prüfung
+(Entfernen ohne Statusdatei, fehlgeschlagener Dateitausch, fehlgeschlagene
+Sicherung) sowie die neuen Regressionstests aus der 3. ChatGPT-Prüfung
+(gesperrte Datei beim Entfernen, fehlende zweite Sicherung, beschädigte
+Statusdatei in drei Varianten, fehlgeschlagene Bilderzeugung nach
+erfolgreicher Sicherung, zwei parallele Instanzen auf demselben Ordner).
 
 ## Test-Checkliste vor der ChatGPT-Prüfung
 

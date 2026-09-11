@@ -34,11 +34,15 @@ namespace OrdnerIconErsteller
                 string? command = commandKey?.GetValue("") as string;
 
                 // Nicht nur die Existenz des Schlüssels prüfen, sondern auch, ob der
-                // hinterlegte Befehl tatsächlich noch auf die aktuelle EXE verweist.
-                // Sonst gilt ein veralteter Eintrag (z.B. nach Verschieben der EXE)
-                // fälschlich als "registriert".
+                // hinterlegte Befehl exakt dem erwarteten Aufruf entspricht. Ein reiner
+                // Teilstring-Vergleich (frühere Version) hätte auch einen fremden Befehl
+                // akzeptiert, der den EXE-Pfad nur zufällig irgendwo als Teilstring
+                // enthält (z.B. als Kommentar oder in einem anderen Argument). Außerdem
+                // gilt so ein veralteter Eintrag (z.B. nach Verschieben der EXE)
+                // korrekt als "nicht registriert".
+                string expectedCommand = $"\"{exePath}\" \"%1\"";
                 return !string.IsNullOrEmpty(command)
-                    && command.IndexOf(exePath, StringComparison.OrdinalIgnoreCase) >= 0;
+                    && string.Equals(command, expectedCommand, StringComparison.OrdinalIgnoreCase);
             }
             catch
             {
