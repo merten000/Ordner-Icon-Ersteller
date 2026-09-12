@@ -3,3 +3,8 @@ bin/
 obj/
 *.user
 .vs/
+
+# Gebaute Ergebnisse - gehören nicht ins Repository, nur die Skripte/der
+# Quellcode dazu. Werden lokal mit dotnet publish bzw. Inno Setup erzeugt.
+src/OrdnerIconErsteller/publish/
+installer/output/

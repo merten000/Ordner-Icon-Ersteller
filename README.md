@@ -279,6 +279,48 @@ dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=
 
 Die EXE liegt danach unter `src\OrdnerIconErsteller\publish\OrdnerIconErsteller.exe`.
 
+## Installer bauen (Inno Setup)
+
+Voraussetzung: [Inno Setup](https://jrsoftware.org/isinfo.php) ist auf dem
+Windows-Rechner installiert (kostenlos).
+
+1. Zuerst die self-contained EXE wie oben beschrieben erzeugen:
+   ```powershell
+   cd src\OrdnerIconErsteller
+   dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o .\publish
+   ```
+2. Danach das Installer-Skript kompilieren, entweder per Rechtsklick auf
+   `installer\OrdnerIconErsteller.iss` -> "Compile", oder über die
+   Kommandozeile:
+   ```powershell
+   cd installer
+   iscc OrdnerIconErsteller.iss
+   ```
+3. Der fertige Installer liegt danach unter
+   `installer\output\OrdnerIconErsteller-Setup-2.0.5.exe`.
+
+Bewusste Entscheidungen im Installer-Skript (Details als Kommentare direkt in
+`installer\OrdnerIconErsteller.iss`):
+
+- Installation nur für den aktuellen Benutzer nach
+  `%LOCALAPPDATA%\Programs\Ordner-Icon-Ersteller` - **keine
+  Administratorrechte, keine UAC-Abfrage**, passend zum Grundprinzip des
+  gesamten Programms (alles läuft über HKCU).
+- Der Explorer-Rechtsklick-Menü-Eintrag wird weiterhin ausschließlich über
+  den Knopf "Ins Rechtsklick-Menü integrieren" im Programm selbst gesetzt -
+  der Installer registriert bei der Installation nichts automatisch.
+- Beim Deinstallieren wird der Registry-Zweig des Menü-Eintrags
+  (`HKCU\Software\Classes\Directory\shell\OrdnerIconErsteller`) vollständig
+  entfernt, damit kein toter Menüeintrag auf eine gelöschte EXE zeigt.
+- Eine feste `AppId` (GUID) im Skript sorgt dafür, dass eine neue Version die
+  alte sauber ersetzt, statt einen zweiten Eintrag in "Apps & Features"
+  anzulegen - diese GUID darf sich zwischen Versionen nicht ändern.
+
+**Noch offen (separater Prüfschritt, nicht Teil der bisherigen
+ChatGPT-Prüfungen):** Installation, Deinstallation und die Reaktion von
+Virenscannern auf den gebauten Installer müssen von Merten unter Windows
+getestet werden, bevor eine Veröffentlichung in Frage kommt.
+
 ## Automatisierte Tests ausführen
 
 Vom Projekt-Hauptordner aus (nicht aus `src\OrdnerIconErsteller`):
