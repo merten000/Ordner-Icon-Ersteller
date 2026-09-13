@@ -368,32 +368,109 @@ namespace OrdnerIconErsteller
                 return;
             }
 
+            // Ordner, Anbieter und Prompt EINMALIG hier festhalten und danach nur
+            // noch diese lokalen Werte verwenden - NICHT mehr _txtFolder.Text usw.
+            // Vorher wurde der Zielordner zweimal gelesen (einmal hier, einmal beim
+            // Aufruf von FolderIconService.SetFolderIcon), sodass ein waehrend der
+            // 20-120 Sekunden dauernden Anfrage geaenderter Ordner dazu fuehren
+            // konnte, dass die PNG-Datei im urspruenglichen, das Icon aber im neu
+            // gewaehlten Ordner landet (Pruefbericht Punkt 1). Zusaetzlich werden
+            // waehrend des Auftrags alle konkurrierenden Ordner-/Icon-Aktionen
+            // gesperrt.
+            string targetFolder = _txtFolder.Text;
             AiImageProvider provider = _cmbAiProvider.SelectedIndex == 1 ? AiImageProvider.Google : AiImageProvider.OpenAi;
             string prompt = _txtAiPrompt.Text.Trim();
+
+            // Zusaetzliche Sicherheitspruefung unmittelbar vor der ersten
+            // tatsaechlichen Netzwerkanfrage (Pruefbericht Punkt 8) - falls z. B.
+            // ein Credential ausserhalb der Oberflaeche angelegt wurde, ohne dass
+            // der Hinweis je bestaetigt wurde.
+            if (!AiConsentService.EnsureGiven(this))
+            {
+                return;
+            }
 
             // Das erzeugte Bild wird dauerhaft im Zielordner selbst gespeichert (nicht
             // nur als Temp-Datei) - so bleibt es als Quelle erhalten, genau wie bei
             // einem manuell ausgewählten Bild, und "Bild für das Icon" zeigt danach
             // weiterhin auf eine tatsächlich vorhandene Datei. Ein zweiter Durchlauf
-            // für denselben Ordner überschreibt die vorherige KI-erzeugte Datei.
-            string generatedImagePath = Path.Combine(_txtFolder.Text, "Icon-Original (von KI erzeugt).png");
+            // für denselben Ordner überschreibt die vorherige KI-erzeugte Datei -
+            // dafür aber ueber eine geschuetzte Sicherungsdatei statt eines direkten
+            // Overwrites (Pruefbericht Punkt 2).
+            string generatedImagePath = Path.Combine(targetFolder, "Icon-Original (von KI erzeugt).png");
+            string tempImagePath = Path.Combine(targetFolder, $".Icon-Original (von KI erzeugt).{Guid.NewGuid():N}.tmp");
+            string? backupImagePath = null;
 
-            _btnAiGenerate.Enabled = false;
+            SetAiOperationControlsEnabled(false);
             Cursor = Cursors.WaitCursor;
             try
             {
-                Log($"KI-Icon wird erzeugt (Anbieter: {provider}, Prompt: \"{prompt}\")...");
+                Log($"KI-Icon wird erzeugt (Anbieter: {provider}, Prompt: \"{prompt}\", Zielordner: {targetFolder})...");
+
+                // AiIconService liefert an dieser Stelle bereits vollstaendig als
+                // gueltiges Bild dekodierte/geprueft Bytes (siehe dortige
+                // ValidateDecodableImage) - eine kaputte Antwort erreicht diese
+                // Stelle also gar nicht erst.
                 byte[] imageBytes = await AiIconService.GenerateIconImageAsync(provider, prompt);
 
-                await File.WriteAllBytesAsync(generatedImagePath, imageBytes);
+                // 1) Immer zuerst in eine eindeutige TEMPORAERE Datei schreiben -
+                //    ein Schreibfehler (z. B. voller Datentraeger) kann dadurch
+                //    niemals ein vorhandenes, gueltiges "Icon-Original" beschaedigen.
+                await File.WriteAllBytesAsync(tempImagePath, imageBytes);
 
-                // Ab hier exakt dieselbe, bereits bestehende und getestete Pipeline
-                // wie bei einem manuell ausgewählten Bild - FolderIconService wird
-                // dafür nicht verändert.
-                FolderIconService.SetFolderIcon(_txtFolder.Text, generatedImagePath);
+                // 2) Ein eventuell vorhandenes altes Original zunaechst nur
+                //    UMBENENNEN (Sicherungsdatei), nicht loeschen - damit es bei
+                //    einem spaeteren Fehler wiederhergestellt werden kann.
+                if (File.Exists(generatedImagePath))
+                {
+                    backupImagePath = Path.Combine(targetFolder, $".Icon-Original (von KI erzeugt).{Guid.NewGuid():N}.bak");
+                    File.Move(generatedImagePath, backupImagePath, overwrite: true);
+                }
+
+                try
+                {
+                    // 3) Erst jetzt die neue Datei an die endgueltige Stelle
+                    //    verschieben (innerhalb desselben Ordners/Datentraegers ein
+                    //    naeherungsweise atomarer Vorgang).
+                    File.Move(tempImagePath, generatedImagePath, overwrite: false);
+                }
+                catch
+                {
+                    RestoreBackupIfPresent(ref backupImagePath, generatedImagePath);
+                    throw;
+                }
+
+                try
+                {
+                    // Ab hier exakt dieselbe, bereits bestehende und getestete
+                    // Pipeline wie bei einem manuell ausgewählten Bild -
+                    // FolderIconService wird dafür nicht verändert. Deren eigene
+                    // Sicherungs-/Rollback-Logik kuemmert sich bereits um Icon.ico,
+                    // desktop.ini, Marker und Ordnerattribute.
+                    FolderIconService.SetFolderIcon(targetFolder, generatedImagePath);
+                }
+                catch
+                {
+                    // Icon setzen fehlgeschlagen - das alte PNG-Original wieder an
+                    // seinen Platz bringen, damit gespeichertes "Original" und
+                    // tatsaechlich gesetztes Icon nicht auseinanderlaufen
+                    // (Pruefbericht Punkt 2). Gab es vorher gar kein Original,
+                    // stattdessen die frisch geschriebene Datei wieder entfernen.
+                    if (backupImagePath is not null)
+                    {
+                        TryDeleteQuietly(generatedImagePath);
+                        RestoreBackupIfPresent(ref backupImagePath, generatedImagePath);
+                    }
+                    else
+                    {
+                        TryDeleteQuietly(generatedImagePath);
+                    }
+                    throw;
+                }
+
                 _txtImage.Text = generatedImagePath;
 
-                Log($"KI-Icon gesetzt für: {_txtFolder.Text} (Bilddatei: {generatedImagePath})");
+                Log($"KI-Icon gesetzt für: {targetFolder} (Bilddatei: {generatedImagePath})");
                 MessageBox.Show(this, "Das von der KI erzeugte Icon wurde gesetzt und als Bilddatei im Ordner gespeichert. " +
                     "Falls der Explorer es nicht sofort anzeigt, Ansicht kurz aktualisieren (F5).",
                     "Fertig", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -406,8 +483,63 @@ namespace OrdnerIconErsteller
             }
             finally
             {
+                // Aufraeumen: eine ggf. noch verbliebene Temp-Datei (z. B. weil der
+                // Move fehlgeschlagen ist) und eine erfolgreich verwendete
+                // Sicherungsdatei (backupImagePath ist dann noch gesetzt, weil sie
+                // NICHT zurueckgespielt werden musste) werden entfernt.
+                TryDeleteQuietly(tempImagePath);
+                if (backupImagePath is not null)
+                {
+                    TryDeleteQuietly(backupImagePath);
+                }
+
                 Cursor = Cursors.Default;
-                _btnAiGenerate.Enabled = true;
+                SetAiOperationControlsEnabled(true);
+            }
+        }
+
+        /// <summary>
+        /// Sperrt/entsperrt waehrend einer laufenden KI-Icon-Erzeugung alle
+        /// Aktionen, die denselben oder einen anderen Ordner betreffen wuerden -
+        /// verhindert, dass der Benutzer zwischendurch den Ordner wechselt oder
+        /// das Icon manuell setzt/entfernt (Pruefbericht Punkt 1).
+        /// </summary>
+        private void SetAiOperationControlsEnabled(bool enabled)
+        {
+            _btnAiGenerate.Enabled = enabled;
+            _btnBrowseFolder.Enabled = enabled;
+            _btnSetIcon.Enabled = enabled;
+            _btnRemoveIcon.Enabled = enabled;
+        }
+
+        /// <summary>
+        /// Spielt eine zuvor angelegte Sicherungsdatei des alten "Icon-Original"
+        /// wieder an ihren urspruenglichen Platz zurueck, falls vorhanden, und
+        /// setzt danach die Referenz zurueck (sodass der finally-Block sie nicht
+        /// noch einmal loescht).
+        /// </summary>
+        private static void RestoreBackupIfPresent(ref string? backupImagePath, string originalPath)
+        {
+            if (backupImagePath is not null && File.Exists(backupImagePath))
+            {
+                File.Move(backupImagePath, originalPath, overwrite: true);
+            }
+            backupImagePath = null;
+        }
+
+        private static void TryDeleteQuietly(string path)
+        {
+            try
+            {
+                if (File.Exists(path))
+                {
+                    File.Delete(path);
+                }
+            }
+            catch
+            {
+                // Aufraeumen ist best effort - ein Fehler hier darf den eigentlich
+                // schon abgeschlossenen/gemeldeten Vorgang nicht ueberdecken.
             }
         }
 

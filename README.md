@@ -1,4 +1,56 @@
-# Ordner-Icon-Ersteller (Version 2.1.0 – komplette Neuentwicklung)
+# Ordner-Icon-Ersteller (Version 2.1.1 – komplette Neuentwicklung)
+
+## Änderungen nach der ChatGPT-Prüfung der KI-Icon-Funktion (v2.1.0 → v2.1.1)
+
+Die Prüfung von Commit `6cff972` (KI-Icon-Funktion) fand vier
+freigabeblockierende Punkte sowie mehrere kleinere Punkte. Alle wurden
+behoben:
+
+1. **Zielordner-Wechsel während laufender Anfrage** (`MainForm.cs`):
+   `GenerateAiIconAsync()` liest Ordner, Anbieter und Prompt jetzt EINMAL zu
+   Beginn in lokale Variablen und verwendet ausschließlich diese – nicht mehr
+   `_txtFolder.Text` nach dem `await`. Zusätzlich sind während der laufenden
+   Anfrage „Ordner wählen", „Icon setzen" und „Icon entfernen" gesperrt
+   (`SetAiOperationControlsEnabled`).
+2. **Ungesichertes Überschreiben des KI-Originals** (`MainForm.cs`): Die
+   Antwort wird zuerst in eine eindeutige temporäre Datei geschrieben, ein
+   vorhandenes altes Original wird nur umbenannt (Sicherungsdatei) statt
+   gelöscht, und erst danach wird die neue Datei an die endgültige Stelle
+   verschoben. Schlägt das Setzen des Icons anschließend fehl, wird das alte
+   PNG-Original aus der Sicherung wiederhergestellt, damit gespeichertes
+   „Original" und tatsächlich gesetztes Icon nicht auseinanderlaufen.
+3. **Tests löschten echte API-Schlüssel** (`ApiKeyStoreTests.cs`,
+   `ApiKeyStore.cs`): `ApiKeyStore` stellt jetzt interne, nur für Tests
+   gedachte `...ForTesting`-Methoden mit frei wählbarem Target-Namen bereit.
+   Die Tests verwenden ausschließlich einen pro Testlauf per GUID eindeutigen
+   Namen (`OrdnerIconErsteller:UnitTest:<guid>`) und fassen die echten
+   Produkt-Ziele `OrdnerIconErsteller:OpenAI`/`OrdnerIconErsteller:Google` nie
+   mehr an.
+4. **Veraltetes OpenAI-Modell**: `gpt-image-1` (laut aktueller OpenAI-
+   Dokumentation „Deprecated") wurde durch `gpt-image-2.5-flare` ersetzt (für
+   schnelle Alltags-Bilderzeugung empfohlen). Der nicht mehr zutreffende
+   Parameter `response_format` wurde entfernt, stattdessen wird `output_format:
+   "png"` gesetzt.
+
+Kleinere, ebenfalls behobene Punkte:
+
+- API-Antworten werden jetzt defensiv mit `TryGetProperty`/Typprüfungen
+  gelesen statt mit `GetProperty`, eine maximale Antwortgröße (30 MB) wird
+  durchgesetzt, und jedes gelieferte Bild wird vor dem dauerhaften Speichern
+  vollständig dekodiert/geprüft (`AiIconService.ValidateDecodableImage`).
+- Der Gemini-Parser überspringt jetzt ausdrücklich „Thinking"-Bildteile
+  (`thought: true`) und akzeptiert nur `inlineData` mit einem `image/*`-
+  MIME-Typ, statt ungeprüft den ersten Bildteil zu verwenden.
+- Die P/Invoke-Deklaration von `CredFree` wurde von `bool` auf `void`
+  korrigiert (die native Windows-Funktion hat den Rückgabetyp `VOID`).
+  Zusätzlich werden verwaltete Kopien des Klartext-Schlüssels jetzt mit
+  `CryptographicOperations.ZeroMemory` sofort überschrieben, `Has...Key()`
+  kopiert den Klartext dafür nicht mehr, und die maximale Credential-Blob-
+  Größe (2560 Byte) wird vor dem Speichern geprüft.
+- Der Zustimmungsdialog (`AiConsentService`) nennt jetzt ausdrücklich, dass
+  eine einzelne Google-Erzeugung bis zu zwei kostenpflichtige Anfragen
+  auslösen kann, und ein fehlgeschlagenes `CreateSubKey` wird nicht mehr
+  stillschweigend ignoriert.
 
 ## Neue Funktion: Icon per KI erzeugen (v2.0.5 → v2.1.0)
 
@@ -365,7 +417,7 @@ Windows-Rechner installiert (kostenlos).
    iscc OrdnerIconErsteller.iss
    ```
 3. Der fertige Installer liegt danach unter
-   `installer\output\OrdnerIconErsteller-Setup-2.1.0.exe`.
+   `installer\output\OrdnerIconErsteller-Setup-2.1.1.exe`.
 
 Bewusste Entscheidungen im Installer-Skript (Details als Kommentare direkt in
 `installer\OrdnerIconErsteller.iss`):
@@ -408,9 +460,13 @@ Varianten, fehlgeschlagene Bilderzeugung nach erfolgreicher Sicherung, zwei
 parallele Instanzen auf demselben Ordner), die Regressionstests aus der
 4. ChatGPT-Prüfung (beschädigte/fremde Statusdatei beim Setzen in zwei
 Varianten, gezielt in der Mitte eines Wiederherstellungs-Tauschs erzwungener
-Fehlschlag) sowie drei neue Tests für den Credential-Manager-Rundlauf der
-KI-Icon-Funktion (`ApiKeyStoreTests.cs`: Speichern/Lesen/Löschen für OpenAI
-und Google, sowie doppeltes Löschen ohne Fehler).
+Fehlschlag) sowie drei Tests für den Credential-Manager-Rundlauf der
+KI-Icon-Funktion (`ApiKeyStoreTests.cs`: Speichern/Lesen/Löschen im Rundlauf,
+doppeltes Löschen ohne Fehler, Ablehnung eines zu langen Schlüssels – alle
+drei ausschließlich über die internen `...ForTesting`-Methoden mit einem pro
+Testlauf eindeutigen Target-Namen, sodass sie nie die echten gespeicherten
+OpenAI-/Google-Schlüssel berühren, siehe oben "Änderungen nach der
+ChatGPT-Prüfung der KI-Icon-Funktion").
 
 ## Test-Checkliste vor der ChatGPT-Prüfung
 

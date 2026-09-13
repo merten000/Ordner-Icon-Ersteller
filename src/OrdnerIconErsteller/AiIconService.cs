@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Drawing;
+using System.IO;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -40,12 +43,20 @@ namespace OrdnerIconErsteller
             Timeout = TimeSpan.FromSeconds(120),
         };
 
+        // Grosszuegige, aber endliche Obergrenze fuer eine einzelne Bildantwort,
+        // um eine unplausibel grosse/verstuemmelte Antwort frueh abzulehnen statt
+        // sie unbegrenzt in den Speicher zu laden (Pruefbericht Punkt 5).
+        private const int MaxImageBytes = 30 * 1024 * 1024; // 30 MB
+
         /// <summary>
         /// Erzeugt ein Bild anhand des Prompts beim gewaehlten Anbieter und liefert
         /// die rohen Bilddaten (PNG) zurueck. Der Aufrufer speichert diese Bytes in
         /// eine temporaere Datei und uebergibt sie an die bestehende, unveraenderte
         /// Pipeline (IconWriter/FolderIconService) - genau wie bei einem manuell
-        /// ausgewaehlten Bild.
+        /// ausgewaehlten Bild. Die Bytes werden hier bereits vollstaendig als
+        /// gueltiges Bild dekodiert/geprueft (Pruefbericht Punkt 5) - der Aufrufer
+        /// muss sie also nicht selbst nochmal validieren, bevor er sie dauerhaft
+        /// speichert.
         /// </summary>
         public static async Task<byte[]> GenerateIconImageAsync(AiImageProvider provider, string prompt)
         {
@@ -54,12 +65,54 @@ namespace OrdnerIconErsteller
                 throw new ArgumentException("Bitte einen Text fuer das gewuenschte Icon eingeben.", nameof(prompt));
             }
 
-            return provider switch
+            byte[] imageBytes = provider switch
             {
                 AiImageProvider.OpenAi => await GenerateWithOpenAiAsync(prompt).ConfigureAwait(false),
                 AiImageProvider.Google => await GenerateWithGoogleAsync(prompt).ConfigureAwait(false),
                 _ => throw new ArgumentOutOfRangeException(nameof(provider), provider, "Unbekannter KI-Anbieter."),
             };
+
+            ValidateDecodableImage(provider, imageBytes);
+            return imageBytes;
+        }
+
+        /// <summary>
+        /// Prueft, dass die vom Anbieter gelieferten Bytes tatsaechlich ein
+        /// vollstaendig dekodierbares Bild sind - nicht nur syntaktisch gueltiges
+        /// Base64. Eine kaputte/unvollstaendige Antwort fliegt damit sofort hier
+        /// als kontrollierter Fehler auf, statt spaeter als beschaedigte
+        /// "Icon-Original"-Datei im Zielordner zu landen (Pruefbericht Punkt 5).
+        /// </summary>
+        private static void ValidateDecodableImage(AiImageProvider provider, byte[] imageBytes)
+        {
+            if (imageBytes.Length == 0)
+            {
+                throw new InvalidOperationException(
+                    $"{provider} hat leere Bilddaten geliefert.");
+            }
+
+            if (imageBytes.Length > MaxImageBytes)
+            {
+                throw new InvalidOperationException(
+                    $"{provider} hat ein ungewöhnlich großes Bild geliefert " +
+                    $"({imageBytes.Length / 1024 / 1024} MB) - das wird zur Sicherheit abgelehnt.");
+            }
+
+            try
+            {
+                using var stream = new MemoryStream(imageBytes, writable: false);
+                using var image = Image.FromStream(stream);
+                // Zugriff auf eine Eigenschaft erzwingt, dass das Bild tatsaechlich
+                // vollstaendig eingelesen wurde, statt nur den Header zu pruefen.
+                _ = image.Width;
+                _ = image.Height;
+            }
+            catch (Exception ex) when (ex is ArgumentException or ExternalException or OutOfMemoryException)
+            {
+                throw new InvalidOperationException(
+                    $"{provider} hat Daten geliefert, die sich nicht als Bild öffnen lassen " +
+                    "(unvollständige oder beschädigte Antwort).", ex);
+            }
         }
 
         private static async Task<byte[]> GenerateWithOpenAiAsync(string prompt)
@@ -72,13 +125,21 @@ namespace OrdnerIconErsteller
                     "\"KI-Einstellungen\" einen Schluessel eingeben.");
             }
 
+            // "gpt-image-1" gilt laut aktueller OpenAI-Dokumentation als veraltet
+            // (siehe https://developers.openai.com/api/docs/guides/image-generation).
+            // "gpt-image-2.5-flare" ist das fuer schnelle Alltags-Bilderzeugung
+            // empfohlene aktuelle Modell - fuer die hier erzeugten einfachen
+            // Ordner-Icons passender als "sunburst" (auf praezise Bildbearbeitung
+            // ausgelegt). GPT-Bildmodelle liefern die Bilddaten immer als Base64 -
+            // ein "response_format"-Parameter (nur fuer DALL-E relevant) entfaellt
+            // dafuer; "output_format" legt stattdessen das Dateiformat fest.
             var requestBody = new
             {
-                model = "gpt-image-1",
+                model = "gpt-image-2.5-flare",
                 prompt,
                 size = "1024x1024",
                 n = 1,
-                response_format = "b64_json",
+                output_format = "png",
             };
 
             using var request = new HttpRequestMessage(HttpMethod.Post, "https://api.openai.com/v1/images/generations")
@@ -99,11 +160,24 @@ namespace OrdnerIconErsteller
             try
             {
                 using var doc = JsonDocument.Parse(responseText);
-                string base64 = doc.RootElement.GetProperty("data")[0].GetProperty("b64_json").GetString()
+                if (!doc.RootElement.TryGetProperty("data", out JsonElement data)
+                    || data.ValueKind != JsonValueKind.Array
+                    || data.GetArrayLength() == 0
+                    || !data[0].TryGetProperty("b64_json", out JsonElement b64Element)
+                    || b64Element.ValueKind != JsonValueKind.String)
+                {
+                    throw new InvalidOperationException("OpenAI hat kein Bild in der Antwort geliefert.");
+                }
+
+                string base64 = b64Element.GetString()
                     ?? throw new InvalidOperationException("OpenAI hat kein Bild in der Antwort geliefert.");
                 return Convert.FromBase64String(base64);
             }
-            catch (Exception ex) when (ex is KeyNotFoundException or JsonException or IndexOutOfRangeException)
+            catch (InvalidOperationException)
+            {
+                throw;
+            }
+            catch (Exception ex) when (ex is JsonException or FormatException)
             {
                 throw new InvalidOperationException(
                     "Die Antwort von OpenAI hatte ein unerwartetes Format und konnte nicht gelesen werden.", ex);
@@ -217,15 +291,47 @@ namespace OrdnerIconErsteller
             try
             {
                 using var doc = JsonDocument.Parse(responseText);
-                JsonElement parts = doc.RootElement.GetProperty("candidates")[0]
-                    .GetProperty("content").GetProperty("parts");
+                if (!doc.RootElement.TryGetProperty("candidates", out JsonElement candidates)
+                    || candidates.ValueKind != JsonValueKind.Array
+                    || candidates.GetArrayLength() == 0
+                    || !candidates[0].TryGetProperty("content", out JsonElement content)
+                    || !content.TryGetProperty("parts", out JsonElement parts)
+                    || parts.ValueKind != JsonValueKind.Array)
+                {
+                    throw new InvalidOperationException("Die Antwort von Google hatte ein unerwartetes Format.");
+                }
 
                 var textParts = new List<string>();
                 foreach (JsonElement part in parts.EnumerateArray())
                 {
-                    if (part.TryGetProperty("inlineData", out JsonElement inlineData)
-                        && inlineData.TryGetProperty("data", out JsonElement dataElement))
+                    // Gemini-3-Bildmodelle koennen "Thinking"-Bildteile mit
+                    // "thought": true liefern, bevor das eigentliche, endgueltige
+                    // Bild kommt. Googles eigenes Beispiel ueberspringt diese
+                    // Thought-Teile ausdruecklich - sonst wuerde hier ggf. ein
+                    // Zwischen-/Denkbild statt des finalen Icons verwendet
+                    // (Pruefbericht Punkt 6).
+                    if (part.TryGetProperty("thought", out JsonElement thoughtElement)
+                        && thoughtElement.ValueKind == JsonValueKind.True)
                     {
+                        continue;
+                    }
+
+                    if (part.TryGetProperty("inlineData", out JsonElement inlineData)
+                        && inlineData.TryGetProperty("data", out JsonElement dataElement)
+                        && dataElement.ValueKind == JsonValueKind.String)
+                    {
+                        // Nur ein unterstuetztes Bildformat akzeptieren, falls Google
+                        // einen mimeType mitliefert (Pruefbericht Punkt 5).
+                        if (inlineData.TryGetProperty("mimeType", out JsonElement mimeTypeElement)
+                            && mimeTypeElement.ValueKind == JsonValueKind.String)
+                        {
+                            string? mimeType = mimeTypeElement.GetString();
+                            if (mimeType is not null && !mimeType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+                            {
+                                continue;
+                            }
+                        }
+
                         string? base64 = dataElement.GetString();
                         if (!string.IsNullOrEmpty(base64))
                         {
@@ -233,7 +339,8 @@ namespace OrdnerIconErsteller
                         }
                     }
 
-                    if (part.TryGetProperty("text", out JsonElement textElement))
+                    if (part.TryGetProperty("text", out JsonElement textElement)
+                        && textElement.ValueKind == JsonValueKind.String)
                     {
                         string? textValue = textElement.GetString();
                         if (!string.IsNullOrWhiteSpace(textValue))
@@ -249,7 +356,11 @@ namespace OrdnerIconErsteller
                 string? textOnlyResponse = textParts.Count > 0 ? string.Join(" ", textParts) : null;
                 return (null, textOnlyResponse);
             }
-            catch (Exception ex) when (ex is KeyNotFoundException or JsonException or IndexOutOfRangeException)
+            catch (InvalidOperationException)
+            {
+                throw;
+            }
+            catch (Exception ex) when (ex is JsonException or FormatException)
             {
                 throw new InvalidOperationException(
                     "Die Antwort von Google hatte ein unerwartetes Format und konnte nicht gelesen werden.", ex);

@@ -36,7 +36,9 @@ namespace OrdnerIconErsteller
                 "Dienst überträgt - alle anderen Funktionen arbeiten vollständig offline.\n\n" +
                 "Je nach Anbieter und Tarif können dabei Kosten entstehen, die von deinem eigenen " +
                 "API-Konto abgerechnet werden. Dieses Programm hat darauf keinen Einfluss und zeigt " +
-                "keine Kosten an.\n\n" +
+                "keine Kosten an. Bei Google kann eine einzelne Icon-Erzeugung automatisch bis zu " +
+                "ZWEI kostenpflichtige Anfragen auslösen, falls die erste Antwort kein Bild enthält " +
+                "und automatisch ein zweiter Versuch gestartet wird.\n\n" +
                 "Möchtest du fortfahren und einen API-Schlüssel hinterlegen?",
                 "Hinweis: Internetübertragung und mögliche Kosten",
                 MessageBoxButtons.YesNo,
@@ -70,8 +72,11 @@ namespace OrdnerIconErsteller
 
         private static void SetGiven()
         {
-            using var key = Registry.CurrentUser.CreateSubKey(SettingsKeyPath, writable: true);
-            key?.SetValue(ConsentValueName, "1");
+            using var key = Registry.CurrentUser.CreateSubKey(SettingsKeyPath, writable: true)
+                ?? throw new InvalidOperationException(
+                    $"Der Registry-Schlüssel \"HKCU\\{SettingsKeyPath}\" konnte nicht angelegt/geöffnet werden. " +
+                    "Die Zustimmung konnte deshalb nicht gespeichert werden.");
+            key.SetValue(ConsentValueName, "1");
         }
     }
 }
