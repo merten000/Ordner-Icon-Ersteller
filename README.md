@@ -232,7 +232,8 @@ zuverlässig als verdächtig einstufen.
    aktuellen Benutzer)
 
 **Noch nicht enthalten** (laut deiner Auswahl bewusst auf später verschoben):
-KI-generierte Icons, automatischer Icon-Vorschlag, fertiger Installer/Setup.exe.
+KI-generierte Icons, automatischer Icon-Vorschlag. Ein Installer (Inno Setup)
+ist inzwischen vorhanden - siehe Abschnitt "Installer bauen" weiter unten.
 
 ## Projektstruktur
 
@@ -355,7 +356,8 @@ erzwungener Fehlschlag).
 
 ## Nächste Schritte (nach deiner Freigabe)
 
-- ChatGPT-Prüfung dieser Version
-- danach ggf. Installer (Inno Setup o.ä., ohne CMD-Tricks) für die
-  Veröffentlichung
+- Installer (Inno Setup) ist vorhanden und von Merten praktisch getestet
+  (Installation, Virenscanner, Funktion, Deinstallation) sowie von ChatGPT
+  code-geprüft
+- README/Disclaimer als eigener Reiter im Programm (vorgemerkt in Notion)
 - danach optional: KI-Icon-Erzeugung, automatischer Vorschlag
