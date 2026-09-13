@@ -88,5 +88,29 @@ namespace OrdnerIconErsteller.Tests
                 ApiKeyStore.DeleteKeyForTesting(targetName);
             }
         }
+
+        [Fact]
+        public void SaveKey_NichtAsciiZeichen_WirftArgumentException()
+        {
+            // Bei der praktischen Erprobung der KI-Icon-Funktion konnte ein
+            // versehentlich mit nicht-ASCII-Zeichen (hier: ein Umlaut)
+            // gespeicherter Schlüssel erfolgreich abgelegt werden, ist dann
+            // aber erst beim eigentlichen API-Aufruf mit der wenig hilfreichen
+            // .NET-Meldung "Request headers must contain only ASCII
+            // characters" gescheitert. Das muss jetzt bereits beim Speichern
+            // mit einer klaren Fehlermeldung verhindert werden.
+            string targetName = NewTestTargetName();
+            const string keyMitUmlaut = "sk-test-schlüssel-mit-umlaut";
+
+            try
+            {
+                Assert.Throws<ArgumentException>(() => ApiKeyStore.SaveKeyForTesting(targetName, keyMitUmlaut));
+                Assert.False(ApiKeyStore.HasKeyForTesting(targetName));
+            }
+            finally
+            {
+                ApiKeyStore.DeleteKeyForTesting(targetName);
+            }
+        }
     }
 }

@@ -270,6 +270,99 @@ namespace OrdnerIconErsteller
         }
 
         /// <summary>
+        /// Schreibt die von der KI erzeugten Bilddaten als
+        /// "Icon-Original (von KI erzeugt).png" in den Zielordner und setzt danach
+        /// das Ordner-Icon daraus - beides als EINE Transaktion unter derselben
+        /// prozessübergreifenden Ordnersperre wie <see cref="SetFolderIcon"/> und
+        /// <see cref="RemoveFolderIcon"/> (siehe <see cref="RunExclusive"/>).
+        ///
+        /// Das behebt zwei von ChatGPT bei der KI-Icon-Funktion gefundene
+        /// Freigabeblocker: (1) eine zweite, gleichzeitig gestartete Instanz konnte
+        /// dieselbe PNG-Datei/denselben Icon-Vorgang parallel bearbeiten, weil die
+        /// PNG-Sicherung/-Ersetzung bisher außerhalb jeder Sperre in MainForm lag;
+        /// (2) ein fehlgeschlagenes Zurückholen der Sicherung konnte dazu führen,
+        /// dass der äußere Aufräum-Code die einzige verbliebene Kopie des alten
+        /// Originals löscht. Beides wird jetzt durch dieselben bereits mehrfach
+        /// geprüften Bausteine (<see cref="SwapIntoPlace"/>/<see cref="UndoSwap"/>
+        /// mit ihrem "safetyPathMustBePreserved"-Mechanismus) abgedeckt wie beim
+        /// Setzen von Icon.ico/desktop.ini.
+        /// </summary>
+        public static void ReplaceGeneratedImageAndSetIcon(string folderPath, byte[] imageBytes, string generatedImagePath)
+        {
+            if (!Directory.Exists(folderPath))
+                throw new DirectoryNotFoundException($"Ordner nicht gefunden: {folderPath}");
+            if (imageBytes is null || imageBytes.Length == 0)
+                throw new ArgumentException("Es wurden keine Bilddaten übergeben.", nameof(imageBytes));
+            if (string.IsNullOrWhiteSpace(generatedImagePath))
+                throw new ArgumentException("Es wurde kein Zielpfad für die Bilddatei übergeben.", nameof(generatedImagePath));
+
+            RunExclusive(folderPath, () => ReplaceGeneratedImageAndSetIconLocked(folderPath, imageBytes, generatedImagePath));
+        }
+
+        private static void ReplaceGeneratedImageAndSetIconLocked(string folderPath, byte[] imageBytes, string generatedImagePath)
+        {
+            string tempImage = UniqueTempPath(folderPath, ".ai-icon.tmp");
+            string imageSafety = UniqueTempPath(folderPath, ".ai-icon.safety");
+            bool imageSwapped = false;
+            bool imageSafetyMustBePreserved = false;
+
+            try
+            {
+                try
+                {
+                    File.WriteAllBytes(tempImage, imageBytes);
+
+                    // Vorhandenes altes "Icon-Original" wird von SwapIntoPlace zuerst
+                    // nach imageSafety verschoben (nicht gelöscht) - schlägt der
+                    // zweite Schritt fehl, holt sich SwapIntoPlace das selbst
+                    // sofort zurück und signalisiert über
+                    // imageSafetyMustBePreserved verbindlich, falls selbst das
+                    // misslingt (siehe Kommentar dort).
+                    SwapIntoPlace(generatedImagePath, tempImage, imageSafety, out imageSafetyMustBePreserved);
+                    imageSwapped = true;
+
+                    // Bereits innerhalb derselben Ordnersperre - kein erneutes
+                    // RunExclusive (würde sich selbst blockieren).
+                    SetFolderIconLocked(folderPath, generatedImagePath);
+                }
+                catch (Exception primary)
+                {
+                    if (imageSwapped)
+                    {
+                        try
+                        {
+                            UndoSwap(generatedImagePath, imageSafety);
+                        }
+                        catch (Exception undoEx)
+                        {
+                            // Wie bei SwapIntoPlace/SwapFromBackupIntoPlace: auch die
+                            // Selbstheilung ist gescheitert - die vorherige Datei
+                            // liegt jetzt nur noch unter imageSafety und MUSS dort
+                            // bewusst erhalten bleiben, unabhängig vom
+                            // "geswapt"-Flag oben.
+                            imageSafetyMustBePreserved = true;
+                            throw new AggregateException(
+                                $"Das Setzen des KI-Icons ist fehlgeschlagen, und das vorherige " +
+                                $"\"Icon-Original\" konnte aus \"{imageSafety}\" nicht automatisch " +
+                                "zurückgeholt werden. Die Datei bleibt dort bewusst erhalten - bitte " +
+                                "manuell prüfen.",
+                                new[] { primary, undoEx });
+                        }
+                    }
+                    throw;
+                }
+            }
+            finally
+            {
+                TryDelete(tempImage);
+                if (!imageSafetyMustBePreserved)
+                {
+                    TryDelete(imageSafety);
+                }
+            }
+        }
+
+        /// <summary>
         /// Entfernt das von diesem Programm gesetzte Ordner-Icon wieder, als eine
         /// einzige Transaktion. Das geschieht ausschließlich anhand der Statusdatei,
         /// die beim ersten "Icon setzen" für diesen Ordner angelegt wurde - ohne diese

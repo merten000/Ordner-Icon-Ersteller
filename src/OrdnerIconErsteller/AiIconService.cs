@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Drawing.Imaging;
 using System.IO;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -33,6 +34,14 @@ namespace OrdnerIconErsteller
     /// Die API-Schluessel werden ausschliesslich ueber <see cref="ApiKeyStore"/>
     /// aus dem Windows-Anmeldeinformations-Manager gelesen - nie aus einer
     /// Konfigurationsdatei im Klartext.
+    ///
+    /// Die reine Antwort-Parsing-/Validierungslogik ist bewusst in interne,
+    /// von HTTP entkoppelte Methoden ausgelagert (Build...RequestBody,
+    /// Parse...ImageResponse, DecodeAndReencodeAsPng) - dadurch koennen
+    /// AiIconServiceTests diese Pfade (gueltige/beschaedigte/uebergrosse/falsch
+    /// typisierte Antworten, Gemini-Thought-Bilder, der tatsaechlich erzeugte
+    /// Request-Body) offline und ohne echte, kostenpflichtige Netzwerkaufrufe
+    /// pruefen (siehe Pruefbericht-Punkt 7 zur KI-Icon-Gegenpruefung).
     /// </summary>
     internal static class AiIconService
     {
@@ -43,18 +52,32 @@ namespace OrdnerIconErsteller
             Timeout = TimeSpan.FromSeconds(120),
         };
 
-        // Grosszuegige, aber endliche Obergrenze fuer eine einzelne Bildantwort,
-        // um eine unplausibel grosse/verstuemmelte Antwort frueh abzulehnen statt
-        // sie unbegrenzt in den Speicher zu laden (Pruefbericht Punkt 5).
-        private const int MaxImageBytes = 30 * 1024 * 1024; // 30 MB
+        // Grosszuegige, aber endliche Obergrenze fuer das dekodierte Bild.
+        internal const int MaxImageBytes = 30 * 1024 * 1024; // 30 MB
+
+        // Obergrenze fuer die rohe HTTP-Antwort (Base64 + JSON-Overhead ist ca.
+        // 1.35x groesser als die dekodierten Bilddaten) - wird VOR dem Einlesen
+        // des Response-Bodys geprueft (Content-Length) bzw. waehrend des Lesens
+        // durchgesetzt, nicht erst nach vollstaendigem Einlesen/Dekodieren
+        // (Pruefbericht Punkt 5).
+        private const int MaxResponseBytes = 45 * 1024 * 1024; // 45 MB
+
+        // Obergrenze fuer die Laenge des Base64-Strings selbst, geprueft BEVOR
+        // Convert.FromBase64String das komplette Bytearray alloziert.
+        private const int MaxBase64Chars = (MaxImageBytes / 3 + 1) * 4 + 4;
+
+        // Sinnvolle Obergrenze fuer die Gesamtpixelzahl eines Icon-Bildes -
+        // verhindert z.B. ein absichtlich winziges, aber extrem hochaufgeloestes
+        // "Bomben"-Bild.
+        private const long MaxPixelCount = 50_000_000; // 50 Megapixel
 
         /// <summary>
         /// Erzeugt ein Bild anhand des Prompts beim gewaehlten Anbieter und liefert
-        /// die rohen Bilddaten (PNG) zurueck. Der Aufrufer speichert diese Bytes in
-        /// eine temporaere Datei und uebergibt sie an die bestehende, unveraenderte
-        /// Pipeline (IconWriter/FolderIconService) - genau wie bei einem manuell
-        /// ausgewaehlten Bild. Die Bytes werden hier bereits vollstaendig als
-        /// gueltiges Bild dekodiert/geprueft (Pruefbericht Punkt 5) - der Aufrufer
+        /// die rohen Bilddaten als kanonisches PNG zurueck. Der Aufrufer speichert
+        /// diese Bytes in die Zieldatei und uebergibt sie an die bestehende
+        /// Pipeline (FolderIconService) - genau wie bei einem manuell ausgewaehlten
+        /// Bild. Die Bytes werden hier bereits vollstaendig dekodiert und neu als
+        /// PNG encodiert (siehe <see cref="DecodeAndReencodeAsPng"/>) - der Aufrufer
         /// muss sie also nicht selbst nochmal validieren, bevor er sie dauerhaft
         /// speichert.
         /// </summary>
@@ -72,18 +95,27 @@ namespace OrdnerIconErsteller
                 _ => throw new ArgumentOutOfRangeException(nameof(provider), provider, "Unbekannter KI-Anbieter."),
             };
 
-            ValidateDecodableImage(provider, imageBytes);
-            return imageBytes;
+            return DecodeAndReencodeAsPng(provider, imageBytes);
         }
 
         /// <summary>
         /// Prueft, dass die vom Anbieter gelieferten Bytes tatsaechlich ein
-        /// vollstaendig dekodierbares Bild sind - nicht nur syntaktisch gueltiges
-        /// Base64. Eine kaputte/unvollstaendige Antwort fliegt damit sofort hier
-        /// als kontrollierter Fehler auf, statt spaeter als beschaedigte
-        /// "Icon-Original"-Datei im Zielordner zu landen (Pruefbericht Punkt 5).
+        /// vollstaendig dekodierbares Bild sind, und liefert eine neu encodierte,
+        /// kanonische PNG-Datei zurueck - unabhaengig davon, welches Format/welchen
+        /// MIME-Typ der Anbieter tatsaechlich geliefert hat.
+        ///
+        /// Wichtig (Pruefbericht Punkt 4): <see cref="Image.FromStream(Stream)"/>
+        /// plus Zugriff auf Width/Height genuegt NICHT als Vollstaendigkeitspruefung
+        /// - GDI+ dekodiert dabei im Wesentlichen nur Header/Metadaten. Bei der
+        /// Gegenpruefung wurde eine um 1.200 Byte abgeschnittene, sonst gueltige PNG
+        /// davon nicht erkannt. Das erzwungene Neu-Encodieren nach PNG (<see
+        /// cref="Image.Save(Stream, ImageFormat)"/>) verlangt dagegen wirklich jede
+        /// Bildzeile - eine abgeschnittene/beschaedigte Datei schlaegt dabei fehl.
+        /// Gleichzeitig entsteht dadurch garantiert eine ECHTE PNG-Datei, selbst
+        /// wenn ein Anbieter faelschlich einen anderen MIME-Typ mit "image/"-Praefix
+        /// gemeldet haette.
         /// </summary>
-        private static void ValidateDecodableImage(AiImageProvider provider, byte[] imageBytes)
+        internal static byte[] DecodeAndReencodeAsPng(AiImageProvider provider, byte[] imageBytes)
         {
             if (imageBytes.Length == 0)
             {
@@ -100,18 +132,30 @@ namespace OrdnerIconErsteller
 
             try
             {
-                using var stream = new MemoryStream(imageBytes, writable: false);
-                using var image = Image.FromStream(stream);
-                // Zugriff auf eine Eigenschaft erzwingt, dass das Bild tatsaechlich
-                // vollstaendig eingelesen wurde, statt nur den Header zu pruefen.
-                _ = image.Width;
-                _ = image.Height;
+                using var inputStream = new MemoryStream(imageBytes, writable: false);
+                using var image = Image.FromStream(inputStream, useEmbeddedColorManagement: false, validateImageData: true);
+
+                if (image.Width <= 0 || image.Height <= 0
+                    || (long)image.Width * image.Height > MaxPixelCount)
+                {
+                    throw new InvalidOperationException(
+                        $"{provider} hat ein Bild mit unplausiblen Abmessungen geliefert " +
+                        $"({image.Width}x{image.Height}).");
+                }
+
+                using var outputStream = new MemoryStream();
+                image.Save(outputStream, ImageFormat.Png);
+                return outputStream.ToArray();
+            }
+            catch (InvalidOperationException)
+            {
+                throw;
             }
             catch (Exception ex) when (ex is ArgumentException or ExternalException or OutOfMemoryException)
             {
                 throw new InvalidOperationException(
-                    $"{provider} hat Daten geliefert, die sich nicht als Bild öffnen lassen " +
-                    "(unvollständige oder beschädigte Antwort).", ex);
+                    $"{provider} hat Daten geliefert, die sich nicht vollständig als Bild lesen/neu " +
+                    "speichern lassen (unvollständige oder beschädigte Antwort).", ex);
             }
         }
 
@@ -125,31 +169,15 @@ namespace OrdnerIconErsteller
                     "\"KI-Einstellungen\" einen Schluessel eingeben.");
             }
 
-            // "gpt-image-1" gilt laut aktueller OpenAI-Dokumentation als veraltet
-            // (siehe https://developers.openai.com/api/docs/guides/image-generation).
-            // "gpt-image-2.5-flare" ist das fuer schnelle Alltags-Bilderzeugung
-            // empfohlene aktuelle Modell - fuer die hier erzeugten einfachen
-            // Ordner-Icons passender als "sunburst" (auf praezise Bildbearbeitung
-            // ausgelegt). GPT-Bildmodelle liefern die Bilddaten immer als Base64 -
-            // ein "response_format"-Parameter (nur fuer DALL-E relevant) entfaellt
-            // dafuer; "output_format" legt stattdessen das Dateiformat fest.
-            var requestBody = new
-            {
-                model = "gpt-image-2.5-flare",
-                prompt,
-                size = "1024x1024",
-                n = 1,
-                output_format = "png",
-            };
-
             using var request = new HttpRequestMessage(HttpMethod.Post, "https://api.openai.com/v1/images/generations")
             {
-                Content = new StringContent(JsonSerializer.Serialize(requestBody), Encoding.UTF8, "application/json"),
+                Content = new StringContent(JsonSerializer.Serialize(BuildOpenAiRequestBody(prompt)), Encoding.UTF8, "application/json"),
             };
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
 
-            using HttpResponseMessage response = await HttpClient.SendAsync(request).ConfigureAwait(false);
-            string responseText = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+            using HttpResponseMessage response = await HttpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead)
+                .ConfigureAwait(false);
+            string responseText = await ReadResponseTextWithLimitAsync(response).ConfigureAwait(false);
 
             if (!response.IsSuccessStatusCode)
             {
@@ -157,6 +185,40 @@ namespace OrdnerIconErsteller
                     $"OpenAI hat die Anfrage abgelehnt (HTTP {(int)response.StatusCode}): {ExtractOpenAiError(responseText)}");
             }
 
+            return ParseOpenAiImageResponse(responseText);
+        }
+
+        /// <summary>
+        /// "gpt-image-1" gilt laut aktueller OpenAI-Dokumentation als veraltet
+        /// (siehe https://developers.openai.com/api/docs/guides/image-generation).
+        /// "gpt-image-2.5-flare" ist das fuer schnelle Alltags-Bilderzeugung
+        /// empfohlene aktuelle Modell - fuer die hier erzeugten einfachen
+        /// Ordner-Icons passender als "sunburst" (auf praezise Bildbearbeitung
+        /// ausgelegt). GPT-Bildmodelle liefern die Bilddaten immer als Base64 -
+        /// ein "response_format"-Parameter (nur fuer DALL-E relevant) entfaellt
+        /// dafuer; "output_format" legt stattdessen das Dateiformat fest.
+        /// Als eigene Methode extrahiert, damit ein Test den tatsaechlich
+        /// erzeugten Request-Body pruefen kann, ohne eine echte Anfrage zu senden
+        /// (Pruefbericht Punkt 7).
+        /// </summary>
+        internal static object BuildOpenAiRequestBody(string prompt) => new
+        {
+            model = "gpt-image-2.5-flare",
+            prompt,
+            size = "1024x1024",
+            n = 1,
+            output_format = "png",
+        };
+
+        /// <summary>
+        /// Liest die JSON-Antwort von OpenAI's Bild-API defensiv (TryGetProperty
+        /// statt GetProperty, explizite ValueKind-Pruefungen) und liefert die
+        /// dekodierten Bild-Bytes. Von der HTTP-Anfrage entkoppelt, damit Tests
+        /// gueltige, unvollstaendige und falsch typisierte Antworten offline
+        /// pruefen koennen.
+        /// </summary>
+        internal static byte[] ParseOpenAiImageResponse(string responseText)
+        {
             try
             {
                 using var doc = JsonDocument.Parse(responseText);
@@ -171,7 +233,7 @@ namespace OrdnerIconErsteller
 
                 string base64 = b64Element.GetString()
                     ?? throw new InvalidOperationException("OpenAI hat kein Bild in der Antwort geliefert.");
-                return Convert.FromBase64String(base64);
+                return DecodeBase64WithLimit(base64, "OpenAI");
             }
             catch (InvalidOperationException)
             {
@@ -239,6 +301,36 @@ namespace OrdnerIconErsteller
             "Do not include any explanatory text in your response - output only the image.";
 
         /// <summary>
+        /// Der tatsaechliche Request-Body fuer einen einzelnen Google-Aufruf, als
+        /// eigene Methode extrahiert, damit ein Test Modellname/Systemanweisung/
+        /// Prompt-Feld pruefen kann, ohne eine echte Anfrage zu senden
+        /// (Pruefbericht Punkt 7).
+        /// </summary>
+        internal static object BuildGoogleRequestBody(string effectivePrompt) => new
+        {
+            system_instruction = new
+            {
+                parts = new object[]
+                {
+                    new
+                    {
+                        text = "You are an image generator for desktop folder icons. Always respond with a " +
+                               "generated image and no descriptive text, even for short or ambiguous prompts. " +
+                               "Never ask clarifying questions.",
+                    },
+                },
+            },
+            contents = new object[]
+            {
+                new { parts = new object[] { new { text = effectivePrompt } } },
+            },
+            generationConfig = new
+            {
+                responseModalities = new[] { "TEXT", "IMAGE" },
+            },
+        };
+
+        /// <summary>
         /// Ein einzelner Aufruf der Google-Bild-API. Liefert die Bild-Bytes, oder -
         /// wenn NUR Text ohne Bild zurückkam - null zusammen mit dieser Text-Antwort
         /// (für die Fehlermeldung/den Retry). Ein abgelehnter HTTP-Status oder ein
@@ -248,39 +340,16 @@ namespace OrdnerIconErsteller
         /// </summary>
         private static async Task<(byte[]? ImageBytes, string? TextOnlyResponse)> GenerateWithGoogleOnceAsync(string apiKey, string effectivePrompt)
         {
-            var requestBody = new
-            {
-                system_instruction = new
-                {
-                    parts = new object[]
-                    {
-                        new
-                        {
-                            text = "You are an image generator for desktop folder icons. Always respond with a " +
-                                   "generated image and no descriptive text, even for short or ambiguous prompts. " +
-                                   "Never ask clarifying questions.",
-                        },
-                    },
-                },
-                contents = new object[]
-                {
-                    new { parts = new object[] { new { text = effectivePrompt } } },
-                },
-                generationConfig = new
-                {
-                    responseModalities = new[] { "TEXT", "IMAGE" },
-                },
-            };
-
             const string url = "https://generativelanguage.googleapis.com/v1/models/gemini-3.1-flash-image:generateContent";
             using var request = new HttpRequestMessage(HttpMethod.Post, url)
             {
-                Content = new StringContent(JsonSerializer.Serialize(requestBody), Encoding.UTF8, "application/json"),
+                Content = new StringContent(JsonSerializer.Serialize(BuildGoogleRequestBody(effectivePrompt)), Encoding.UTF8, "application/json"),
             };
             request.Headers.Add("x-goog-api-key", apiKey);
 
-            using HttpResponseMessage response = await HttpClient.SendAsync(request).ConfigureAwait(false);
-            string responseText = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+            using HttpResponseMessage response = await HttpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead)
+                .ConfigureAwait(false);
+            string responseText = await ReadResponseTextWithLimitAsync(response).ConfigureAwait(false);
 
             if (!response.IsSuccessStatusCode)
             {
@@ -288,6 +357,18 @@ namespace OrdnerIconErsteller
                     $"Google hat die Anfrage abgelehnt (HTTP {(int)response.StatusCode}): {ExtractGoogleError(responseText)}");
             }
 
+            return ParseGoogleImageResponse(responseText);
+        }
+
+        /// <summary>
+        /// Liest die JSON-Antwort von Googles Bild-API defensiv und liefert entweder
+        /// die dekodierten Bild-Bytes oder - falls nur Text zurueckkam - diesen Text.
+        /// Von der HTTP-Anfrage entkoppelt, damit Tests gueltige Bilder,
+        /// uebersprungene "Thinking"-Bildteile, reine Text-Antworten und falsch
+        /// typisierte Antworten offline pruefen koennen (Pruefbericht Punkt 7).
+        /// </summary>
+        internal static (byte[]? ImageBytes, string? TextOnlyResponse) ParseGoogleImageResponse(string responseText)
+        {
             try
             {
                 using var doc = JsonDocument.Parse(responseText);
@@ -308,8 +389,7 @@ namespace OrdnerIconErsteller
                     // "thought": true liefern, bevor das eigentliche, endgueltige
                     // Bild kommt. Googles eigenes Beispiel ueberspringt diese
                     // Thought-Teile ausdruecklich - sonst wuerde hier ggf. ein
-                    // Zwischen-/Denkbild statt des finalen Icons verwendet
-                    // (Pruefbericht Punkt 6).
+                    // Zwischen-/Denkbild statt des finalen Icons verwendet.
                     if (part.TryGetProperty("thought", out JsonElement thoughtElement)
                         && thoughtElement.ValueKind == JsonValueKind.True)
                     {
@@ -320,8 +400,12 @@ namespace OrdnerIconErsteller
                         && inlineData.TryGetProperty("data", out JsonElement dataElement)
                         && dataElement.ValueKind == JsonValueKind.String)
                     {
-                        // Nur ein unterstuetztes Bildformat akzeptieren, falls Google
-                        // einen mimeType mitliefert (Pruefbericht Punkt 5).
+                        // Als grobes Vorfilter akzeptieren wir nur einen mit "image/"
+                        // beginnenden mimeType, falls einer gemeldet wird. Das entscheidende
+                        // Sicherheitsnetz ist aber ohnehin das erzwungene Neu-Encodieren als
+                        // PNG in DecodeAndReencodeAsPng - dieses Vorfilter ersetzt das
+                        // NICHT, sondern spart nur unnoetiges Base64-Dekodieren offensichtlich
+                        // falscher Antworten.
                         if (inlineData.TryGetProperty("mimeType", out JsonElement mimeTypeElement)
                             && mimeTypeElement.ValueKind == JsonValueKind.String)
                         {
@@ -335,7 +419,7 @@ namespace OrdnerIconErsteller
                         string? base64 = dataElement.GetString();
                         if (!string.IsNullOrEmpty(base64))
                         {
-                            return (Convert.FromBase64String(base64), null);
+                            return (DecodeBase64WithLimit(base64, "Google"), null);
                         }
                     }
 
@@ -365,6 +449,61 @@ namespace OrdnerIconErsteller
                 throw new InvalidOperationException(
                     "Die Antwort von Google hatte ein unerwartetes Format und konnte nicht gelesen werden.", ex);
             }
+        }
+
+        /// <summary>
+        /// Prueft die Laenge des Base64-Strings, BEVOR <see
+        /// cref="Convert.FromBase64String"/> das komplette dekodierte Bytearray
+        /// alloziert - verhindert, dass eine unplausibel grosse Antwort erst nach
+        /// vollstaendiger Dekodierung abgelehnt wird (Pruefbericht Punkt 5).
+        /// </summary>
+        private static byte[] DecodeBase64WithLimit(string base64, string providerName)
+        {
+            if (base64.Length > MaxBase64Chars)
+            {
+                throw new InvalidOperationException(
+                    $"{providerName} hat unplausibel viele Bilddaten geliefert - das wird zur Sicherheit " +
+                    "abgelehnt, bevor es vollständig dekodiert wird.");
+            }
+
+            return Convert.FromBase64String(base64);
+        }
+
+        /// <summary>
+        /// Liest den Antwort-Body mit einer harten Obergrenze, statt ihn per
+        /// <see cref="HttpContent.ReadAsStringAsync()"/> bedingungslos vollständig
+        /// in den Speicher zu laden. Ein per Content-Length bereits als zu groß
+        /// gemeldeter Body wird sofort abgelehnt; fehlt der Header (z.B. bei
+        /// Chunked Transfer Encoding), wird der Stream gestückelt gelesen und beim
+        /// Überschreiten der Grenze sofort abgebrochen (Pruefbericht Punkt 5).
+        /// </summary>
+        private static async Task<string> ReadResponseTextWithLimitAsync(HttpResponseMessage response)
+        {
+            if (response.Content.Headers.ContentLength is long declaredLength && declaredLength > MaxResponseBytes)
+            {
+                throw new InvalidOperationException(
+                    $"Die Antwort ist mit {declaredLength / 1024 / 1024} MB unplausibel groß und wird zur " +
+                    "Sicherheit abgelehnt, ohne sie vollständig zu laden.");
+            }
+
+            await using Stream stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
+            using var buffer = new MemoryStream();
+            byte[] chunk = new byte[81920];
+            long total = 0;
+            int read;
+            while ((read = await stream.ReadAsync(chunk).ConfigureAwait(false)) > 0)
+            {
+                total += read;
+                if (total > MaxResponseBytes)
+                {
+                    throw new InvalidOperationException(
+                        $"Die Antwort überschreitet die zulässige Größe von {MaxResponseBytes / 1024 / 1024} MB " +
+                        "und wurde zur Sicherheit abgebrochen, bevor sie vollständig geladen wurde.");
+                }
+                buffer.Write(chunk, 0, read);
+            }
+
+            return Encoding.UTF8.GetString(buffer.GetBuffer(), 0, (int)buffer.Length);
         }
 
         private static string ExtractOpenAiError(string responseText)

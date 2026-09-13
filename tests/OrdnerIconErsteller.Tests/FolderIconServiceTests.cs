@@ -637,5 +637,134 @@ namespace OrdnerIconErsteller.Tests
                 // Aufräumen im Test ist best-effort.
             }
         }
+
+        private static byte[] CreateTestPngBytes(Color color)
+        {
+            using var bmp = new Bitmap(16, 16, PixelFormat.Format32bppArgb);
+            using var g = Graphics.FromImage(bmp);
+            g.Clear(color);
+            using var stream = new MemoryStream();
+            bmp.Save(stream, ImageFormat.Png);
+            return stream.ToArray();
+        }
+
+        // Die folgenden Tests decken die neue, im Rahmen der 2. ChatGPT-
+        // Gegenprüfung (Commit a6af83f, Punkte 1 und 2) eingeführte Methode
+        // FolderIconService.ReplaceGeneratedImageAndSetIcon ab: den
+        // atomaren PNG-Tausch samt Icon-Setzen als EINE durch RunExclusive
+        // geschützte Transaktion, inklusive des safetyPathMustBePreserved-
+        // Verhaltens bei einem fehlgeschlagenen Rollback (Prüfbericht Punkt 7:
+        // "risikoreichste neue Pfade haben keine automatisierten Tests").
+        [Fact]
+        public void ReplaceGeneratedImageAndSetIcon_ErstesMal_SetztBildUndIcon()
+        {
+            string targetFolder = Directory.CreateTempSubdirectory("OrdnerIconErsteller_KiZiel_").FullName;
+            try
+            {
+                string generatedImagePath = Path.Combine(targetFolder, "Icon-Original (von KI erzeugt).png");
+                byte[] pngBytes = CreateTestPngBytes(Color.Tomato);
+
+                FolderIconService.ReplaceGeneratedImageAndSetIcon(targetFolder, pngBytes, generatedImagePath);
+
+                Assert.True(File.Exists(generatedImagePath));
+                Assert.Equal(pngBytes, File.ReadAllBytes(generatedImagePath));
+                Assert.True(File.Exists(Path.Combine(targetFolder, "desktop.ini")));
+                Assert.True(File.Exists(Path.Combine(targetFolder, "FolderIcon.ico")));
+
+                // Keine Temp-/Sicherungsdateien dürfen nach einem erfolgreichen
+                // Durchlauf zurückbleiben.
+                Assert.Empty(new DirectoryInfo(targetFolder).GetFiles("*.ai-icon.tmp*"));
+                Assert.Empty(new DirectoryInfo(targetFolder).GetFiles("*.ai-icon.safety*"));
+            }
+            finally
+            {
+                TryDeleteDirectory(targetFolder);
+            }
+        }
+
+        [Fact]
+        public void ReplaceGeneratedImageAndSetIcon_ZweitesMal_ErsetztVorherigesBildAtomar()
+        {
+            string targetFolder = Directory.CreateTempSubdirectory("OrdnerIconErsteller_KiZiel_").FullName;
+            try
+            {
+                string generatedImagePath = Path.Combine(targetFolder, "Icon-Original (von KI erzeugt).png");
+                byte[] erstesBild = CreateTestPngBytes(Color.Tomato);
+                byte[] zweitesBild = CreateTestPngBytes(Color.SteelBlue);
+
+                FolderIconService.ReplaceGeneratedImageAndSetIcon(targetFolder, erstesBild, generatedImagePath);
+                FolderIconService.ReplaceGeneratedImageAndSetIcon(targetFolder, zweitesBild, generatedImagePath);
+
+                Assert.Equal(zweitesBild, File.ReadAllBytes(generatedImagePath));
+                Assert.Empty(new DirectoryInfo(targetFolder).GetFiles("*.ai-icon.tmp*"));
+                Assert.Empty(new DirectoryInfo(targetFolder).GetFiles("*.ai-icon.safety*"));
+            }
+            finally
+            {
+                TryDeleteDirectory(targetFolder);
+            }
+        }
+
+        [Fact]
+        public void ReplaceGeneratedImageAndSetIcon_OrdnerFehlt_WirftDirectoryNotFoundException()
+        {
+            string targetFolder = Path.Combine(Path.GetTempPath(), "OrdnerIconErsteller_NichtVorhanden_" + Guid.NewGuid().ToString("N"));
+            string generatedImagePath = Path.Combine(targetFolder, "Icon-Original (von KI erzeugt).png");
+
+            Assert.Throws<DirectoryNotFoundException>(
+                () => FolderIconService.ReplaceGeneratedImageAndSetIcon(targetFolder, CreateTestPngBytes(Color.Tomato), generatedImagePath));
+        }
+
+        [Fact]
+        public void ReplaceGeneratedImageAndSetIcon_LeereBilddaten_WirftArgumentException()
+        {
+            string targetFolder = Directory.CreateTempSubdirectory("OrdnerIconErsteller_KiZiel_").FullName;
+            try
+            {
+                string generatedImagePath = Path.Combine(targetFolder, "Icon-Original (von KI erzeugt).png");
+                Assert.Throws<ArgumentException>(
+                    () => FolderIconService.ReplaceGeneratedImageAndSetIcon(targetFolder, Array.Empty<byte>(), generatedImagePath));
+            }
+            finally
+            {
+                TryDeleteDirectory(targetFolder);
+            }
+        }
+
+        [Fact]
+        public void ReplaceGeneratedImageAndSetIcon_ZweiSequenzielleAufrufeAufDenselbenOrdner_SerialisierenSichSauber()
+        {
+            // Deckt Prüfbericht Punkt 2 ab ("zwei Programminstanzen können dieselbe
+            // PNG-Transaktion gleichzeitig verändern"): RunExclusive verwendet eine
+            // per-Prozess-unabhängige Sperrdatei (FileShare.None), daher genügt es
+            // hier, zwei Aufrufe direkt nacheinander auf denselben Ordner
+            // auszuführen und zu prüfen, dass am Ende ein konsistenter Endzustand
+            // ohne liegen gebliebene Sperr-/Temp-/Sicherungsdateien vorliegt - ein
+            // echter Test mit zwei parallelen Prozessen ist im Rahmen eines
+            // Unittests nicht sinnvoll abbildbar.
+            string targetFolder = Directory.CreateTempSubdirectory("OrdnerIconErsteller_KiZiel_").FullName;
+            try
+            {
+                string generatedImagePath = Path.Combine(targetFolder, "Icon-Original (von KI erzeugt).png");
+
+                for (int i = 0; i < 5; i++)
+                {
+                    byte[] bild = CreateTestPngBytes(i % 2 == 0 ? Color.Tomato : Color.SteelBlue);
+                    FolderIconService.ReplaceGeneratedImageAndSetIcon(targetFolder, bild, generatedImagePath);
+                    Assert.Equal(bild, File.ReadAllBytes(generatedImagePath));
+                }
+
+                // Die Sperrdatei selbst bleibt bestehen (wird von RunExclusive
+                // absichtlich nicht gelöscht, siehe bestehendes Verhalten von
+                // SetFolderIcon/RemoveFolderIcon), aber keine Transaktions-Temp-
+                // oder Sicherungsdateien.
+                Assert.Empty(new DirectoryInfo(targetFolder).GetFiles("*.ai-icon.tmp*"));
+                Assert.Empty(new DirectoryInfo(targetFolder).GetFiles("*.ai-icon.safety*"));
+            }
+            finally
+            {
+                TryDeleteDirectory(targetFolder);
+            }
+        }
     }
 }

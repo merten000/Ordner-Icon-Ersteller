@@ -1,4 +1,87 @@
-# Ordner-Icon-Ersteller (Version 2.1.1 – komplette Neuentwicklung)
+# Ordner-Icon-Ersteller (Version 2.1.2 – komplette Neuentwicklung)
+
+## Änderungen nach der 2. ChatGPT-Gegenprüfung der KI-Icon-Funktion (v2.1.1 → v2.1.2)
+
+Die Gegenprüfung von Commit `a6af83f` bestätigte, dass die 4 vorherigen
+Freigabeblocker behoben sind, fand aber 3 NEUE freigabeblockierende Punkte
+sowie 4 weitere, nicht blockierende Punkte. Alle wurden behoben:
+
+1. **Sicherung wird nach fehlgeschlagener Wiederherstellung gelöscht**
+   (`MainForm.cs`, `FolderIconService.cs`): Die komplette, handgeschriebene
+   Temp-Datei/Umbenennen/Verschieben/Rollback-Logik in `MainForm.cs` wurde
+   entfernt und durch einen Aufruf der neuen Methode
+   `FolderIconService.ReplaceGeneratedImageAndSetIcon` ersetzt. Diese
+   verwendet dasselbe, bereits mehrfach geprüfte `SwapIntoPlace`/`UndoSwap`-
+   Selbstheilungsmuster mit `safetyPathMustBePreserved`-Out-Parameter, das
+   `SetFolderIconLocked` für `FolderIcon.ico`/`desktop.ini` schon einsetzt –
+   eine Sicherungsdatei wird jetzt nur dann gelöscht, wenn ihre eigene
+   Wiederherstellung tatsächlich geglückt ist.
+2. **PNG-Transaktion war nicht instanzübergreifend gesperrt**
+   (`FolderIconService.cs`): `ReplaceGeneratedImageAndSetIcon` führt den
+   kompletten Ablauf (PNG tauschen + Icon setzen) jetzt als EINE Transaktion
+   innerhalb von `RunExclusive` aus – derselben prozessübergreifenden,
+   dateibasierten Sperre (`FileShare.None` auf eine versteckte
+   `.ordnericonersteller.lock`-Datei je Ordner), die `SetFolderIcon`/
+   `RemoveFolderIcon` schon verwenden.
+3. **Fehler beim Speichern der Zustimmung außerhalb der Fehlerbehandlung**
+   (`MainForm.cs`): `AiConsentService.EnsureGiven(this)` wird in `SaveAiKey()`
+   jetzt als erste Anweisung INNERHALB des bestehenden `try`-Blocks
+   aufgerufen, und in `GenerateAiIconAsync()` in einem eigenen `try`/`catch`
+   mit Log-Eintrag und Fehlerdialog behandelt, statt vor jeder
+   Fehlerbehandlung zu stehen.
+
+Nicht blockierende, ebenfalls behobene Punkte:
+
+- **Unvollständige Bild-Dekodierprüfung** (`AiIconService.cs`): Die bisherige
+  `ValidateDecodableImage`-Prüfung (`Image.FromStream` + Zugriff auf
+  Width/Height) erkannte eine um 1.200 Byte gekürzte, sonst gültige PNG-Datei
+  NICHT als beschädigt, da GDI+ dabei im Wesentlichen nur Header/Metadaten
+  liest. Die neue Methode `DecodeAndReencodeAsPng` erzwingt stattdessen ein
+  vollständiges Neu-Encodieren nach PNG (`Image.Save(..., ImageFormat.Png)`),
+  was jede Bildzeile tatsächlich dekodiert und gleichzeitig garantiert, dass
+  die gespeicherten Bytes eine echte PNG-Datei sind – unabhängig vom vom
+  Anbieter behaupteten MIME-Typ.
+- **30-MB-Grenze griff erst nach vollständigem Einlesen/Decodieren**
+  (`AiIconService.cs`): HTTP-Antworten werden jetzt mit
+  `HttpCompletionOption.ResponseHeadersRead` abgerufen und über
+  `ReadResponseTextWithLimitAsync` gestückelt mit einer harten Obergrenze
+  gelesen (Content-Length-Vorprüfung bzw. Abbruch während des Lesens), und
+  Base64-Antworten werden über `DecodeBase64WithLimit` anhand ihrer
+  Zeichenlänge geprüft, BEVOR `Convert.FromBase64String` das komplette
+  Bytearray alloziert.
+- **Verwaltete Schlüsselkopie wurde bei Überlänge/Allokationsfehler nicht
+  genullt** (`ApiKeyStore.cs`): Die Längenprüfung und die
+  `Marshal.AllocHGlobal`-Allokation liegen jetzt innerhalb eines äußeren
+  `try`/`finally`, dessen `finally`-Block `blobBytes` in JEDEM Fall über
+  `CryptographicOperations.ZeroMemory` löscht – auch wenn die Längenprüfung
+  wirft oder die Allokation fehlschlägt.
+- **Fehlende automatisierte Tests für die riskantesten neuen Codepfade**:
+  Die reine Anfrage-Erstellung/Antwort-Auswertung wurde als HTTP-unabhängige,
+  interne Methoden extrahiert (`BuildOpenAiRequestBody`,
+  `ParseOpenAiImageResponse`, `BuildGoogleRequestBody`,
+  `ParseGoogleImageResponse`, `DecodeAndReencodeAsPng`) und wird jetzt in
+  `AiIconServiceTests.cs` vollständig offline getestet (gültige/beschädigte/
+  übergroße/falsch typisierte Antworten, übersprungene Gemini-"Thinking"-
+  Bilder, der tatsächlich erzeugte Request-Body). Zusätzlich deckt
+  `FolderIconServiceTests.cs` jetzt `ReplaceGeneratedImageAndSetIcon` ab
+  (erstmaliges Setzen, wiederholtes Ersetzen, fehlender Ordner, leere
+  Bilddaten, mehrere sequenzielle Aufrufe auf denselben Ordner). Siehe dazu
+  auch die Korrektur weiter unten im Abschnitt „Automatisierte Tests
+  ausführen".
+
+Zusätzlich beim praktischen Test von Merten gefunden und ebenfalls behoben:
+
+- **Nicht-ASCII-Zeichen im API-Schlüssel** (`ApiKeyStore.cs`): Ein Schlüssel
+  mit einem Nicht-ASCII-Zeichen (z. B. ein versehentlich beim Kopieren
+  übernommener Umlaut, ein typografisches Anführungszeichen oder ein
+  Gedankenstrich) ließ sich bisher speichern, scheiterte dann aber erst beim
+  eigentlichen API-Aufruf mit der wenig hilfreichen, englischen .NET-Meldung
+  „Request headers must contain only ASCII characters" (kein Absturz – die
+  Fehlerbehandlung selbst hat korrekt funktioniert, nur die Meldung war
+  unklar und kam zu spät). `ApiKeyStore.SaveKey` prüft jetzt beim Speichern
+  direkt auf reine ASCII-Zeichen und zeigt sofort eine klare, deutsche
+  Fehlermeldung. Dafür wurde ein neuer Test ergänzt
+  (`SaveKey_NichtAsciiZeichen_WirftArgumentException`).
 
 ## Änderungen nach der ChatGPT-Prüfung der KI-Icon-Funktion (v2.1.0 → v2.1.1)
 
@@ -99,12 +182,24 @@ oder Google (Gemini). Wichtig dabei:
   `MainForm.cs` (neuer Bereich "Icon per KI erzeugen (optional)" mit
   Anbieter-Wahl, Schlüssel-Eingabe und Prompt-Feld direkt im Hauptfenster).
 
-**Bewusst nicht automatisiert testbar:** Die eigentlichen KI-API-Aufrufe
-(`AiIconService`) senden echte, potenziell kostenpflichtige Anfragen an
-OpenAI/Google und sind deshalb nicht Teil der automatisierten Tests. Der
-Speicher-Rundlauf (`ApiKeyStore`: Speichern/Lesen/Löschen im
-Anmeldeinformations-Manager) wird dagegen automatisiert getestet
-(`ApiKeyStoreTests.cs`).
+**Was automatisiert getestet wird und was nicht:** Ein ECHTER HTTP-Aufruf an
+OpenAI/Google ist bewusst NICHT Teil der automatisierten Tests, da er eine
+echte, potenziell kostenpflichtige Anfrage auslösen würde. Die eigentliche
+Anfrage-Erstellung und Antwort-Auswertung (`BuildOpenAiRequestBody`,
+`ParseOpenAiImageResponse`, `BuildGoogleRequestBody`,
+`ParseGoogleImageResponse`, `DecodeAndReencodeAsPng`) ist davon unabhängig
+und wurde deshalb als eigene, HTTP-entkoppelte interne Methoden ausgelagert –
+diese WERDEN automatisiert getestet (`AiIconServiceTests.cs`), inklusive
+gültiger/beschädigter/übergroßer/falsch typisierter Antworten und
+übersprungener Gemini-„Thinking"-Bilder. (Eine frühere Version dieses
+Abschnitts beschrieb die KI-API-Anbindung pauschal als „nicht automatisiert
+testbar" – laut ChatGPT-Gegenprüfung war das so nicht richtig, da genau diese
+Logik ohne echten Netzwerkaufruf prüfbar ist; diese Beschreibung wurde
+entsprechend korrigiert.) Der Speicher-Rundlauf (`ApiKeyStore`:
+Speichern/Lesen/Löschen im Anmeldeinformations-Manager) sowie der atomare
+PNG-Tausch samt Icon-Setzen (`FolderIconService.ReplaceGeneratedImageAndSetIcon`)
+werden ebenfalls automatisiert getestet (`ApiKeyStoreTests.cs` bzw.
+`FolderIconServiceTests.cs`).
 
 ## Änderungen nach der 5. ChatGPT-Prüfung (v2.0.4 → v2.0.5)
 
@@ -417,7 +512,7 @@ Windows-Rechner installiert (kostenlos).
    iscc OrdnerIconErsteller.iss
    ```
 3. Der fertige Installer liegt danach unter
-   `installer\output\OrdnerIconErsteller-Setup-2.1.1.exe`.
+   `installer\output\OrdnerIconErsteller-Setup-2.1.2.exe`.
 
 Bewusste Entscheidungen im Installer-Skript (Details als Kommentare direkt in
 `installer\OrdnerIconErsteller.iss`):
@@ -450,7 +545,7 @@ Vom Projekt-Hauptordner aus (nicht aus `src\OrdnerIconErsteller`):
 dotnet test
 ```
 
-Das baut Haupt- und Testprojekt und führt die xUnit-Tests aus (19 Tests
+Das baut Haupt- und Testprojekt und führt die xUnit-Tests aus (43 Tests
 insgesamt): der Sicherung/Wiederherstellung-Rundlauf mit exakter
 Attribut-Wiederherstellung, die Fehlerpfadtests aus der 2. ChatGPT-Prüfung
 (Entfernen ohne Statusdatei, fehlgeschlagener Dateitausch, fehlgeschlagene
@@ -460,13 +555,23 @@ Varianten, fehlgeschlagene Bilderzeugung nach erfolgreicher Sicherung, zwei
 parallele Instanzen auf demselben Ordner), die Regressionstests aus der
 4. ChatGPT-Prüfung (beschädigte/fremde Statusdatei beim Setzen in zwei
 Varianten, gezielt in der Mitte eines Wiederherstellungs-Tauschs erzwungener
-Fehlschlag) sowie drei Tests für den Credential-Manager-Rundlauf der
+Fehlschlag), fünf neue Tests für `FolderIconService.ReplaceGeneratedImageAndSetIcon`
+aus der 2. ChatGPT-Gegenprüfung der KI-Icon-Funktion (erstmaliges Setzen,
+wiederholtes atomares Ersetzen, fehlender Zielordner, leere Bilddaten, mehrere
+sequenzielle Aufrufe auf denselben Ordner ohne liegen gebliebene Temp-/
+Sicherungsdateien), drei Tests für den Credential-Manager-Rundlauf der
 KI-Icon-Funktion (`ApiKeyStoreTests.cs`: Speichern/Lesen/Löschen im Rundlauf,
 doppeltes Löschen ohne Fehler, Ablehnung eines zu langen Schlüssels – alle
 drei ausschließlich über die internen `...ForTesting`-Methoden mit einem pro
 Testlauf eindeutigen Target-Namen, sodass sie nie die echten gespeicherten
 OpenAI-/Google-Schlüssel berühren, siehe oben "Änderungen nach der
-ChatGPT-Prüfung der KI-Icon-Funktion").
+ChatGPT-Prüfung der KI-Icon-Funktion") sowie 18 neue, rein offline laufende
+Tests für die HTTP-entkoppelten Kernmethoden der KI-Bilderzeugung
+(`AiIconServiceTests.cs`: erzeugte Request-Bodys für OpenAI/Google, Parsen
+gültiger/unvollständiger/falsch typisierter Antworten, übersprungene
+Gemini-„Thinking"-Bilder, sowie die erzwungene Bild-Dekodierung/
+Neu-Encodierung inklusive einer absichtlich abgeschnittenen PNG-Datei – siehe
+oben "Änderungen nach der 2. ChatGPT-Gegenprüfung der KI-Icon-Funktion").
 
 ## Test-Checkliste vor der ChatGPT-Prüfung
 

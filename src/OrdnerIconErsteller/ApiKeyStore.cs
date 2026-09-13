@@ -93,45 +93,85 @@ namespace OrdnerIconErsteller
                 throw new ArgumentException("Der API-Schluessel darf nicht leer sein.", nameof(apiKey));
             }
 
-            byte[] blobBytes = Encoding.Unicode.GetBytes(apiKey);
-            if (blobBytes.Length > MaxCredentialBlobBytes)
+            // Echte OpenAI-/Google-API-Schluessel bestehen ausschliesslich aus
+            // ASCII-Zeichen. Ein Schluessel mit Nicht-ASCII-Zeichen (z. B. durch
+            // ein beim Kopieren aus einem Dokument versehentlich mit uebernommenes
+            // typografisches Anfuehrungszeichen, einen Gedankenstrich oder einen
+            // Umlaut) liesse sich hier zwar trotzdem speichern, wuerde aber erst
+            // spaeter beim tatsaechlichen API-Aufruf mit der wenig hilfreichen,
+            // englischen .NET-Fehlermeldung "Request headers must contain only
+            // ASCII characters" fehlschlagen (in der Praxis beobachtet). Das wird
+            // stattdessen bereits beim Speichern mit einer klaren, deutschen
+            // Fehlermeldung abgefangen.
+            if (!IsAsciiOnly(apiKey))
             {
                 throw new ArgumentException(
-                    $"Der API-Schluessel ist zu lang fuer den Windows-Anmeldeinformations-Manager " +
-                    $"(maximal {MaxCredentialBlobBytes} Byte, dieser Schluessel benoetigt {blobBytes.Length} Byte).",
+                    "Der API-Schluessel enthaelt Zeichen, die in einem echten API-Schluessel nicht " +
+                    "vorkommen (z. B. Umlaute, typografische Anfuehrungszeichen oder ein Gedankenstrich). " +
+                    "Bitte pruefen, ob beim Kopieren zusaetzliche Zeichen mit uebernommen wurden, und den " +
+                    "Schluessel erneut einfuegen.",
                     nameof(apiKey));
             }
 
-            IntPtr blobPtr = Marshal.AllocHGlobal(blobBytes.Length);
+            byte[] blobBytes = Encoding.Unicode.GetBytes(apiKey);
+
+            // Die gesamte Verarbeitung ab hier (Laengenpruefung, Allokation,
+            // CredWrite) liegt bewusst in einem aeusseren try/finally, dessen
+            // finally-Block "blobBytes" IMMER nullt - auch wenn die
+            // Laengenpruefung wirft oder Marshal.AllocHGlobal fehlschlaegt.
+            // Vorher konnte ein zu langer Schluessel die verwaltete
+            // Klartext-Kopie ungenullt im Speicher zuruecklassen, bis die
+            // Garbage Collection sie irgendwann einsammelt (2. ChatGPT-
+            // Pruefbericht, Commit a6af83f, Punkt 6). Der unmanaged Puffer
+            // wird weiterhin separat und fehlersicher im inneren try/finally
+            // freigegeben.
             try
             {
-                Marshal.Copy(blobBytes, 0, blobPtr, blobBytes.Length);
-
-                var credential = new CREDENTIAL
+                if (blobBytes.Length > MaxCredentialBlobBytes)
                 {
-                    Type = CredTypeGeneric,
-                    TargetName = targetName,
-                    Comment = "Ordner-Icon-Ersteller: API-Schluessel fuer KI-Icon-Erzeugung",
-                    CredentialBlobSize = (uint)blobBytes.Length,
-                    CredentialBlob = blobPtr,
-                    Persist = CredPersistLocalMachine,
-                    UserName = "OrdnerIconErsteller",
-                };
+                    throw new ArgumentException(
+                        $"Der API-Schluessel ist zu lang fuer den Windows-Anmeldeinformations-Manager " +
+                        $"(maximal {MaxCredentialBlobBytes} Byte, dieser Schluessel benoetigt {blobBytes.Length} Byte).",
+                        nameof(apiKey));
+                }
 
-                if (!CredWrite(ref credential, 0))
+                IntPtr blobPtr = Marshal.AllocHGlobal(blobBytes.Length);
+                try
                 {
-                    int error = Marshal.GetLastWin32Error();
-                    throw new InvalidOperationException(
-                        $"Der API-Schluessel konnte nicht im Windows-Anmeldeinformations-Manager gespeichert werden (Fehlercode {error}).");
+                    Marshal.Copy(blobBytes, 0, blobPtr, blobBytes.Length);
+
+                    var credential = new CREDENTIAL
+                    {
+                        Type = CredTypeGeneric,
+                        TargetName = targetName,
+                        Comment = "Ordner-Icon-Ersteller: API-Schluessel fuer KI-Icon-Erzeugung",
+                        CredentialBlobSize = (uint)blobBytes.Length,
+                        CredentialBlob = blobPtr,
+                        Persist = CredPersistLocalMachine,
+                        UserName = "OrdnerIconErsteller",
+                    };
+
+                    if (!CredWrite(ref credential, 0))
+                    {
+                        int error = Marshal.GetLastWin32Error();
+                        throw new InvalidOperationException(
+                            $"Der API-Schluessel konnte nicht im Windows-Anmeldeinformations-Manager gespeichert werden (Fehlercode {error}).");
+                    }
+                }
+                finally
+                {
+                    // Aus Sicherheitsgruenden den Klartext-Schluessel umgehend
+                    // aus dem unmanaged Speicher entfernen, statt auf die
+                    // Garbage Collection zu warten.
+                    Marshal.Copy(new byte[blobBytes.Length], 0, blobPtr, blobBytes.Length);
+                    Marshal.FreeHGlobal(blobPtr);
                 }
             }
             finally
             {
-                // Aus Sicherheitsgruenden den Klartext-Schluessel umgehend aus dem
-                // unmanaged UND dem verwalteten Speicher entfernen, statt auf die
-                // Garbage Collection zu warten (Pruefbericht Punkt 7).
-                Marshal.Copy(new byte[blobBytes.Length], 0, blobPtr, blobBytes.Length);
-                Marshal.FreeHGlobal(blobPtr);
+                // Nullt die verwaltete Klartext-Kopie in JEDEM Fall - auch bei
+                // zu langem Schluessel oder einem fehlgeschlagenen AllocHGlobal
+                // (Pruefbericht Punkt 6).
                 CryptographicOperations.ZeroMemory(blobBytes);
             }
         }
@@ -191,6 +231,24 @@ namespace OrdnerIconErsteller
             }
 
             CredFree(credPtr);
+            return true;
+        }
+
+        /// <summary>
+        /// Prueft, ob eine Zeichenkette ausschliesslich aus druckbaren ASCII-
+        /// Zeichen (0x20-0x7E) besteht - genau die Zeichenmenge, die ein echter
+        /// OpenAI-/Google-API-Schluessel verwendet und die sich gefahrlos als
+        /// HTTP-Header-Wert versenden laesst.
+        /// </summary>
+        private static bool IsAsciiOnly(string value)
+        {
+            foreach (char c in value)
+            {
+                if (c < 0x20 || c > 0x7E)
+                {
+                    return false;
+                }
+            }
             return true;
         }
 
