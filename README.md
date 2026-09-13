@@ -1,4 +1,58 @@
-# Ordner-Icon-Ersteller (Version 2.0.5 – komplette Neuentwicklung)
+# Ordner-Icon-Ersteller (Version 2.1.0 – komplette Neuentwicklung)
+
+## Neue Funktion: Icon per KI erzeugen (v2.0.5 → v2.1.0)
+
+Neu hinzugekommen: ein Ordner-Icon kann jetzt statt eines eigenen Bildes auch
+per Texteingabe ("Prompt") von einer KI erzeugt werden, wahlweise über OpenAI
+oder Google (Gemini). Wichtig dabei:
+
+- **Das ist die einzige Stelle im gesamten Programm, die bewusst Daten über
+  das Internet an einen externen Dienst sendet** (den eingegebenen Prompt-
+  Text) – alle anderen Funktionen bleiben vollständig offline. Das steht nicht
+  im Widerspruch zur Grundregel "kein externer Prozessaufruf" (siehe unten):
+  es wird weiterhin niemals `cmd.exe`, `powershell.exe` o. ä. gestartet,
+  sondern ausschließlich die eingebaute .NET-Klasse `HttpClient` für die
+  HTTPS-Anfrage direkt an die APIs von OpenAI bzw. Google verwendet.
+- Die API-Schlüssel für beide Anbieter werden **ausschließlich im
+  Windows-Anmeldeinformations-Manager** gespeichert (`ApiKeyStore.cs`, per
+  P/Invoke auf `advapi32.dll` – `CredWrite`/`CredRead`/`CredDelete`), nicht
+  als Klartextdatei im Programmordner.
+- Anbieter-Auswahl und API-Schlüssel-Eingabe sitzen **direkt im Hauptfenster**
+  im Bereich "Icon per KI erzeugen" (kein separater Dialog) - nach Merten's
+  praktischem Test wurde das bewusst so vereinfacht.
+- Beim allerersten Speichern eines Schlüssels zeigt das Programm **einmalig**
+  einen Hinweis, dass dabei Daten übertragen werden und je nach Anbieter
+  Kosten entstehen können (`AiConsentService.cs`). Der Zustimmungs-Status
+  wird dauerhaft unter `HKCU\Software\OrdnerIconErsteller` gemerkt, damit der
+  Hinweis danach nicht bei jedem Mal erneut erscheint.
+- Das erzeugte Bild wird **dauerhaft im Zielordner selbst gespeichert**
+  (Dateiname `Icon-Original (von KI erzeugt).png`) und durchläuft anschließend
+  exakt dieselbe, bereits bestehende und getestete Pipeline wie ein manuell
+  ausgewähltes Bild (`FolderIconService.SetFolderIcon`) – an dieser Kernlogik
+  wurde nichts geändert. Ein erneuter Lauf für denselben Ordner überschreibt
+  die vorherige KI-erzeugte Datei.
+- **Zuverlässigere Google-Bilderzeugung bei kurzen Prompts**: Gemini-Bildmodelle
+  antworten bei sehr kurzen/mehrdeutigen Eingaben (z. B. nur "Katze") manchmal
+  nur mit Text statt einem Bild (kein Fehler, HTTP 200 - das Modell "fragt
+  nach" statt zu erzeugen). Dagegen: der Prompt wird automatisch in einen
+  ausformulierten Satz eingebettet (laut Googles eigenem Prompting-Leitfaden
+  zuverlässiger als Stichworte), zusätzlich verlangt eine `system_instruction`
+  ausdrücklich ausschließlich ein Bild als Antwort. Kommt trotzdem nur Text
+  zurück, wird EINMAL automatisch mit einer noch deutlicheren Formulierung
+  wiederholt; scheitert auch das, zeigt die Fehlermeldung die Text-Antwort
+  des Modells zur Einordnung an.
+- Neue Dateien: `ApiKeyStore.cs` (Credential-Manager-Zugriff),
+  `AiIconService.cs` (HTTP-Anbindung an OpenAI/Google), `AiConsentService.cs`
+  (einmaliger Hinweis, Zustimmungs-Flag unter HKCU). Geänderte Datei:
+  `MainForm.cs` (neuer Bereich "Icon per KI erzeugen (optional)" mit
+  Anbieter-Wahl, Schlüssel-Eingabe und Prompt-Feld direkt im Hauptfenster).
+
+**Bewusst nicht automatisiert testbar:** Die eigentlichen KI-API-Aufrufe
+(`AiIconService`) senden echte, potenziell kostenpflichtige Anfragen an
+OpenAI/Google und sind deshalb nicht Teil der automatisierten Tests. Der
+Speicher-Rundlauf (`ApiKeyStore`: Speichern/Lesen/Löschen im
+Anmeldeinformations-Manager) wird dagegen automatisiert getestet
+(`ApiKeyStoreTests.cs`).
 
 ## Änderungen nach der 5. ChatGPT-Prüfung (v2.0.4 → v2.0.5)
 
@@ -215,8 +269,12 @@ zuverlässig als verdächtig einstufen.
   unter `HKEY_CURRENT_USER\Software\Classes\...` angelegt (gilt nur für das
   eigene Benutzerkonto), direkt über die .NET-Registry-API
   (`Microsoft.Win32.Registry`), nicht über einen Registry-Editor-Aufruf.
-- **Kein Internetzugriff, kein Nachladen von Code zur Laufzeit.** Alles läuft
-  lokal und offline.
+- **Kein Internetzugriff, kein Nachladen von Code zur Laufzeit** – mit einer
+  bewussten, klar abgegrenzten Ausnahme: die optionale KI-Icon-Funktion sendet
+  den eingegebenen Prompt-Text an OpenAI bzw. Google, wenn der Benutzer sie
+  aktiv nutzt (siehe Abschnitt oben). Alle anderen Funktionen bleiben
+  vollständig offline, und es wird dabei zu keinem Zeitpunkt Code
+  nachgeladen oder ausgeführt – nur ein fertiges Bild wird empfangen.
 - **Standard-Windows-Mechanismus für Ordner-Icons** (`desktop.ini` +
   versteckte `.ico`-Datei im Zielordner) statt irgendwelcher Tricks.
 
@@ -230,10 +288,15 @@ zuverlässig als verdächtig einstufen.
 5. „Ins Rechtsklick-Menü integrieren" / „entfernen" → fügt einen Eintrag
    „Ordner-Icon ändern..." zum Rechtsklick-Menü von Ordnern hinzu (nur für den
    aktuellen Benutzer)
+6. „Icon per KI erzeugen (optional)" → Beschreibung eingeben, Anbieter
+   (OpenAI/Google) wählen, „Icon per KI erzeugen" klicken – nutzt danach
+   dieselbe Icon-Pipeline wie ein manuell ausgewähltes Bild (siehe Abschnitt
+   "Neue Funktion: Icon per KI erzeugen" oben)
 
-**Noch nicht enthalten** (laut deiner Auswahl bewusst auf später verschoben):
-KI-generierte Icons, automatischer Icon-Vorschlag. Ein Installer (Inno Setup)
-ist inzwischen vorhanden - siehe Abschnitt "Installer bauen" weiter unten.
+**Noch nicht enthalten**: automatischer Icon-Vorschlag (ohne eigenen Prompt).
+Ein Installer (Inno Setup) ist vorhanden - siehe Abschnitt "Installer bauen"
+weiter unten. Das README/Disclaimer-Tab im Programm selbst ist bewusst auf
+später verschoben (siehe "Nächste Schritte" unten).
 
 ## Projektstruktur
 
@@ -246,12 +309,16 @@ OrdnerIconErsteller/
 │       ├── MainForm.cs
 │       ├── FolderIconService.cs
 │       ├── IconWriter.cs
-│       └── ContextMenuService.cs
+│       ├── ContextMenuService.cs
+│       ├── ApiKeyStore.cs
+│       ├── AiIconService.cs
+│       └── AiConsentService.cs
 └── tests/
     └── OrdnerIconErsteller.Tests/
         ├── OrdnerIconErsteller.Tests.csproj
         ├── IconWriterTests.cs
-        └── FolderIconServiceTests.cs
+        ├── FolderIconServiceTests.cs
+        └── ApiKeyStoreTests.cs
 ```
 
 ## Bauen (auf deinem Windows-PC, .NET 8 SDK vorausgesetzt)
@@ -298,7 +365,7 @@ Windows-Rechner installiert (kostenlos).
    iscc OrdnerIconErsteller.iss
    ```
 3. Der fertige Installer liegt danach unter
-   `installer\output\OrdnerIconErsteller-Setup-2.0.5.exe`.
+   `installer\output\OrdnerIconErsteller-Setup-2.1.0.exe`.
 
 Bewusste Entscheidungen im Installer-Skript (Details als Kommentare direkt in
 `installer\OrdnerIconErsteller.iss`):
@@ -331,17 +398,19 @@ Vom Projekt-Hauptordner aus (nicht aus `src\OrdnerIconErsteller`):
 dotnet test
 ```
 
-Das baut Haupt- und Testprojekt und führt die xUnit-Tests aus (16 Tests
+Das baut Haupt- und Testprojekt und führt die xUnit-Tests aus (19 Tests
 insgesamt): der Sicherung/Wiederherstellung-Rundlauf mit exakter
 Attribut-Wiederherstellung, die Fehlerpfadtests aus der 2. ChatGPT-Prüfung
 (Entfernen ohne Statusdatei, fehlgeschlagener Dateitausch, fehlgeschlagene
 Sicherung), die Regressionstests aus der 3. ChatGPT-Prüfung (gesperrte Datei
 beim Entfernen, fehlende zweite Sicherung, beschädigte Statusdatei in drei
 Varianten, fehlgeschlagene Bilderzeugung nach erfolgreicher Sicherung, zwei
-parallele Instanzen auf demselben Ordner) sowie die neuen Regressionstests
-aus der 4. ChatGPT-Prüfung (beschädigte/fremde Statusdatei beim Setzen in
-zwei Varianten, gezielt in der Mitte eines Wiederherstellungs-Tauschs
-erzwungener Fehlschlag).
+parallele Instanzen auf demselben Ordner), die Regressionstests aus der
+4. ChatGPT-Prüfung (beschädigte/fremde Statusdatei beim Setzen in zwei
+Varianten, gezielt in der Mitte eines Wiederherstellungs-Tauschs erzwungener
+Fehlschlag) sowie drei neue Tests für den Credential-Manager-Rundlauf der
+KI-Icon-Funktion (`ApiKeyStoreTests.cs`: Speichern/Lesen/Löschen für OpenAI
+und Google, sowie doppeltes Löschen ohne Fehler).
 
 ## Test-Checkliste vor der ChatGPT-Prüfung
 
@@ -354,11 +423,22 @@ erzwungener Fehlschlag).
       bereits eingetragenem Ordner
 - [ ] „Aus Rechtsklick-Menü entfernen" entfernt den Eintrag wieder
 - [ ] Kein UAC-Admin-Dialog erscheint an irgendeiner Stelle
+- [ ] Im Bereich „Icon per KI erzeugen" einen (ggf. Test-)API-Schlüssel
+      eingeben und „Speichern" klicken → beim allerersten Mal erscheint der
+      Kosten-/Datenübertragungs-Hinweis, danach nicht mehr
+- [ ] „Icon per KI erzeugen" mit einem echten API-Schlüssel und einer
+      Beschreibung testen (einmal OpenAI, einmal Google) → Icon wird gesetzt,
+      Bilddatei „Icon-Original (von KI erzeugt).png" liegt im Zielordner
+- [ ] Ohne hinterlegten Schlüssel „Icon per KI erzeugen" klicken → klare
+      Fehlermeldung statt Absturz
 
 ## Nächste Schritte (nach deiner Freigabe)
 
 - Installer (Inno Setup) ist vorhanden und von Merten praktisch getestet
   (Installation, Virenscanner, Funktion, Deinstallation) sowie von ChatGPT
   code-geprüft
-- README/Disclaimer als eigener Reiter im Programm (vorgemerkt in Notion)
-- danach optional: KI-Icon-Erzeugung, automatischer Vorschlag
+- KI-Icon-Erzeugung (OpenAI + Google, Credential Manager, einmaliger Hinweis)
+  ist implementiert und wartet auf praktisches Testen durch Merten sowie die
+  ChatGPT-Codeprüfung
+- danach: README/Disclaimer als eigener Reiter im Programm (vorgemerkt in
+  Notion, bewusst kurz vor Projektende geplant)

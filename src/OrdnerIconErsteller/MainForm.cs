@@ -1,6 +1,7 @@
 using System;
 using System.Drawing;
 using System.IO;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace OrdnerIconErsteller
@@ -16,6 +17,14 @@ namespace OrdnerIconErsteller
         private readonly Button _btnRegisterMenu = new() { Text = "Ins Rechtsklick-Menü integrieren" };
         private readonly Button _btnUnregisterMenu = new() { Text = "Aus Rechtsklick-Menü entfernen" };
         private readonly Label _lblMenuStatus = new() { AutoSize = true };
+        private readonly TextBox _txtAiPrompt = new();
+        private readonly ComboBox _cmbAiProvider = new() { DropDownStyle = ComboBoxStyle.DropDownList };
+        private readonly TextBox _txtAiKey = new() { UseSystemPasswordChar = true };
+        private readonly CheckBox _chkShowAiKey = new() { Text = "anzeigen" };
+        private readonly Button _btnAiSaveKey = new() { Text = "Speichern" };
+        private readonly Button _btnAiDeleteKey = new() { Text = "Löschen" };
+        private readonly Label _lblAiKeyStatus = new() { AutoSize = true };
+        private readonly Button _btnAiGenerate = new() { Text = "Icon per KI erzeugen" };
         private readonly TextBox _txtLog = new()
         {
             Multiline = true,
@@ -35,6 +44,7 @@ namespace OrdnerIconErsteller
             BuildLayout();
             WireEvents();
             RefreshMenuStatus();
+            RefreshAiKeyField();
 
             if (!string.IsNullOrEmpty(startFolder))
             {
@@ -50,8 +60,9 @@ namespace OrdnerIconErsteller
                 Dock = DockStyle.Fill,
                 ColumnCount = 1,
                 Padding = new Padding(12),
-                RowCount = 5
+                RowCount = 6
             };
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -98,14 +109,55 @@ namespace OrdnerIconErsteller
             menuPanel.Controls.Add(_lblMenuStatus);
             menuGroup.Controls.Add(menuPanel);
 
-            // Zeile 5: Log
+            // Zeile 5: Icon per KI erzeugen (optional)
+            var aiGroup = new GroupBox { Text = "Icon per KI erzeugen (optional)", Dock = DockStyle.Fill, AutoSize = true, Padding = new Padding(8) };
+            var aiLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, AutoSize = true };
+
+            // Anbieter + API-Schlüssel direkt im Hauptfenster (bewusst kein
+            // separater Dialog - siehe Rückmeldung nach dem ersten praktischen Test).
+            var aiKeyPanel = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 5, AutoSize = true };
+            aiKeyPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            aiKeyPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            _cmbAiProvider.Width = 100;
+            _cmbAiProvider.Items.Add("OpenAI");
+            _cmbAiProvider.Items.Add("Google");
+            _cmbAiProvider.SelectedIndex = 0;
+            _txtAiKey.Dock = DockStyle.Fill;
+            _txtAiKey.PlaceholderText = "API-Schlüssel für den gewählten Anbieter";
+            _btnAiSaveKey.Width = 100;
+            _btnAiDeleteKey.Width = 100;
+            aiKeyPanel.Controls.Add(_cmbAiProvider, 0, 0);
+            aiKeyPanel.Controls.Add(_txtAiKey, 1, 0);
+            aiKeyPanel.Controls.Add(_chkShowAiKey, 2, 0);
+            aiKeyPanel.Controls.Add(_btnAiSaveKey, 3, 0);
+            aiKeyPanel.Controls.Add(_btnAiDeleteKey, 4, 0);
+            _lblAiKeyStatus.Margin = new Padding(0, 4, 0, 4);
+
+            var aiPromptPanel = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, AutoSize = true };
+            _txtAiPrompt.Dock = DockStyle.Fill;
+            _txtAiPrompt.PlaceholderText = "z. B. \"ein minimalistisches blaues Wolken-Symbol\"";
+            aiPromptPanel.Controls.Add(new Label { Text = "Beschreibung (Prompt):", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, 4, 0, 0) }, 0, 0);
+            aiPromptPanel.Controls.Add(_txtAiPrompt, 0, 1);
+
+            var aiActionPanel = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
+            _btnAiGenerate.Width = 170;
+            aiActionPanel.Controls.Add(_btnAiGenerate);
+
+            aiLayout.Controls.Add(aiKeyPanel, 0, 0);
+            aiLayout.Controls.Add(_lblAiKeyStatus, 0, 1);
+            aiLayout.Controls.Add(aiPromptPanel, 0, 2);
+            aiLayout.Controls.Add(aiActionPanel, 0, 3);
+            aiGroup.Controls.Add(aiLayout);
+
+            // Zeile 6: Log
             _txtLog.Dock = DockStyle.Fill;
 
             root.Controls.Add(folderPanel, 0, 0);
             root.Controls.Add(imagePanel, 0, 1);
             root.Controls.Add(actionPanel, 0, 2);
             root.Controls.Add(menuGroup, 0, 3);
-            root.Controls.Add(_txtLog, 0, 4);
+            root.Controls.Add(aiGroup, 0, 4);
+            root.Controls.Add(_txtLog, 0, 5);
 
             Controls.Add(root);
         }
@@ -138,6 +190,11 @@ namespace OrdnerIconErsteller
             _btnRemoveIcon.Click += (_, _) => RemoveIcon();
             _btnRegisterMenu.Click += (_, _) => RegisterMenu();
             _btnUnregisterMenu.Click += (_, _) => UnregisterMenu();
+            _btnAiGenerate.Click += async (_, _) => await GenerateAiIconAsync();
+            _cmbAiProvider.SelectedIndexChanged += (_, _) => RefreshAiKeyField();
+            _chkShowAiKey.CheckedChanged += (_, _) => _txtAiKey.UseSystemPasswordChar = !_chkShowAiKey.Checked;
+            _btnAiSaveKey.Click += (_, _) => SaveAiKey();
+            _btnAiDeleteKey.Click += (_, _) => DeleteAiKey();
         }
 
         private void SetIcon()
@@ -221,6 +278,136 @@ namespace OrdnerIconErsteller
                 Log($"FEHLER beim Entfernen des Menüs: {ex.Message}");
                 MessageBox.Show(this, $"Fehler beim Entfernen aus dem Kontextmenü:\n{ex.Message}", "Fehler",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private bool IsGoogleSelected => _cmbAiProvider.SelectedIndex == 1;
+
+        private void SaveAiKey()
+        {
+            string value = _txtAiKey.Text.Trim();
+            if (string.IsNullOrEmpty(value) || value == PasswordPlaceholder)
+            {
+                MessageBox.Show(this, "Bitte einen gültigen API-Schlüssel eingeben.", "Schlüssel fehlt",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            if (!AiConsentService.EnsureGiven(this))
+            {
+                return;
+            }
+
+            try
+            {
+                if (IsGoogleSelected)
+                {
+                    ApiKeyStore.SaveGoogleKey(value);
+                }
+                else
+                {
+                    ApiKeyStore.SaveOpenAiKey(value);
+                }
+
+                RefreshAiKeyField();
+                Log($"API-Schlüssel für {(IsGoogleSelected ? "Google" : "OpenAI")} gespeichert (im Windows-Anmeldeinformations-Manager).");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, $"Fehler beim Speichern des Schlüssels:\n{ex.Message}", "Fehler",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void DeleteAiKey()
+        {
+            try
+            {
+                if (IsGoogleSelected)
+                {
+                    ApiKeyStore.DeleteGoogleKey();
+                }
+                else
+                {
+                    ApiKeyStore.DeleteOpenAiKey();
+                }
+
+                RefreshAiKeyField();
+                Log($"API-Schlüssel für {(IsGoogleSelected ? "Google" : "OpenAI")} gelöscht.");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, $"Fehler beim Löschen des Schlüssels:\n{ex.Message}", "Fehler",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private const string PasswordPlaceholder = "••••••••";
+
+        private void RefreshAiKeyField()
+        {
+            bool hasKey = IsGoogleSelected ? ApiKeyStore.HasGoogleKey() : ApiKeyStore.HasOpenAiKey();
+            _txtAiKey.Text = hasKey ? PasswordPlaceholder : string.Empty;
+            _lblAiKeyStatus.Text = hasKey
+                ? $"Status ({(IsGoogleSelected ? "Google" : "OpenAI")}): Schlüssel hinterlegt"
+                : $"Status ({(IsGoogleSelected ? "Google" : "OpenAI")}): kein Schlüssel hinterlegt";
+        }
+
+        private async Task GenerateAiIconAsync()
+        {
+            if (string.IsNullOrWhiteSpace(_txtFolder.Text) || !Directory.Exists(_txtFolder.Text))
+            {
+                MessageBox.Show(this, "Bitte zuerst einen gültigen Ordner auswählen.", "Ordner fehlt",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            if (string.IsNullOrWhiteSpace(_txtAiPrompt.Text))
+            {
+                MessageBox.Show(this, "Bitte zuerst eine Beschreibung für das gewünschte Icon eingeben.", "Beschreibung fehlt",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            AiImageProvider provider = _cmbAiProvider.SelectedIndex == 1 ? AiImageProvider.Google : AiImageProvider.OpenAi;
+            string prompt = _txtAiPrompt.Text.Trim();
+
+            // Das erzeugte Bild wird dauerhaft im Zielordner selbst gespeichert (nicht
+            // nur als Temp-Datei) - so bleibt es als Quelle erhalten, genau wie bei
+            // einem manuell ausgewählten Bild, und "Bild für das Icon" zeigt danach
+            // weiterhin auf eine tatsächlich vorhandene Datei. Ein zweiter Durchlauf
+            // für denselben Ordner überschreibt die vorherige KI-erzeugte Datei.
+            string generatedImagePath = Path.Combine(_txtFolder.Text, "Icon-Original (von KI erzeugt).png");
+
+            _btnAiGenerate.Enabled = false;
+            Cursor = Cursors.WaitCursor;
+            try
+            {
+                Log($"KI-Icon wird erzeugt (Anbieter: {provider}, Prompt: \"{prompt}\")...");
+                byte[] imageBytes = await AiIconService.GenerateIconImageAsync(provider, prompt);
+
+                await File.WriteAllBytesAsync(generatedImagePath, imageBytes);
+
+                // Ab hier exakt dieselbe, bereits bestehende und getestete Pipeline
+                // wie bei einem manuell ausgewählten Bild - FolderIconService wird
+                // dafür nicht verändert.
+                FolderIconService.SetFolderIcon(_txtFolder.Text, generatedImagePath);
+                _txtImage.Text = generatedImagePath;
+
+                Log($"KI-Icon gesetzt für: {_txtFolder.Text} (Bilddatei: {generatedImagePath})");
+                MessageBox.Show(this, "Das von der KI erzeugte Icon wurde gesetzt und als Bilddatei im Ordner gespeichert. " +
+                    "Falls der Explorer es nicht sofort anzeigt, Ansicht kurz aktualisieren (F5).",
+                    "Fertig", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                Log($"FEHLER bei der KI-Icon-Erzeugung: {ex.Message}");
+                MessageBox.Show(this, $"Fehler bei der KI-Icon-Erzeugung:\n{ex.Message}", "Fehler",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                Cursor = Cursors.Default;
+                _btnAiGenerate.Enabled = true;
             }
         }
 
