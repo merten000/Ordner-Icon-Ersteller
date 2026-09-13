@@ -317,10 +317,11 @@ Bewusste Entscheidungen im Installer-Skript (Details als Kommentare direkt in
   alte sauber ersetzt, statt einen zweiten Eintrag in "Apps & Features"
   anzulegen - diese GUID darf sich zwischen Versionen nicht ändern.
 
-**Noch offen (separater Prüfschritt, nicht Teil der bisherigen
-ChatGPT-Prüfungen):** Installation, Deinstallation und die Reaktion von
-Virenscannern auf den gebauten Installer müssen von Merten unter Windows
-getestet werden, bevor eine Veröffentlichung in Frage kommt.
+**Praktisch getestet:** Merten hat den Installer unter Windows erfolgreich
+getestet (Installation ohne Sicherheitsabfrage, Virenscanner-Reaktion,
+Funktion nach Installation, Deinstallation inkl. Registry-Aufräumung).
+Zusätzlich hat ChatGPT das Skript selbst code-geprüft (Commit `621f37d`,
+Nachprüfung nach Korrekturen: Commit `65b88b6`) - keine offenen Blocker mehr.
 
 ## Automatisierte Tests ausführen
 
