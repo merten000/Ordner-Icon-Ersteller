@@ -487,6 +487,17 @@ namespace OrdnerIconErsteller
         /// Überschreiten der Grenze sofort abgebrochen (Pruefbericht Punkt 5).
         /// </summary>
         private static async Task<string> ReadResponseTextWithLimitAsync(HttpResponseMessage response)
+            => await ReadResponseTextWithLimitAsync(response, ResponseBodyReadTimeout).ConfigureAwait(false);
+
+        /// <summary>
+        /// Überladung mit explizitem Timeout-Parameter statt der festen
+        /// <see cref="ResponseBodyReadTimeout"/> - ausschließlich damit automatisierte
+        /// Tests (3. ChatGPT-Gegenprüfung von v2.1.2, fehlender Regressionstest für den
+        /// Timeout-Fix) den Timeout-Zweig auslösen können, ohne 120 echte Sekunden zu
+        /// warten. Die eigentliche Anwendung ruft ausschließlich die Überladung ohne
+        /// Timeout-Parameter oben auf.
+        /// </summary>
+        internal static async Task<string> ReadResponseTextWithLimitAsync(HttpResponseMessage response, TimeSpan timeout)
         {
             if (response.Content.Headers.ContentLength is long declaredLength && declaredLength > MaxResponseBytes)
             {
@@ -498,7 +509,7 @@ namespace OrdnerIconErsteller
             // Eigener CancellationToken fuer das Lesen des Bodys - siehe Kommentar bei
             // ResponseBodyReadTimeout. HttpClient.Timeout allein wuerde diesen Teil wegen
             // HttpCompletionOption.ResponseHeadersRead nicht mehr abdecken.
-            using var readTimeoutCts = new CancellationTokenSource(ResponseBodyReadTimeout);
+            using var readTimeoutCts = new CancellationTokenSource(timeout);
             try
             {
                 await using Stream stream = await response.Content.ReadAsStreamAsync(readTimeoutCts.Token).ConfigureAwait(false);
@@ -524,7 +535,7 @@ namespace OrdnerIconErsteller
             {
                 throw new InvalidOperationException(
                     "Die Antwort wurde nicht innerhalb der zulässigen Zeit vollständig empfangen " +
-                    $"(Zeitüberschreitung nach {ResponseBodyReadTimeout.TotalSeconds:0} Sekunden beim Lesen " +
+                    $"(Zeitüberschreitung nach {timeout.TotalSeconds:0} Sekunden beim Lesen " +
                     "des Antwortkörpers).");
             }
         }

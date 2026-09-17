@@ -51,6 +51,18 @@ namespace OrdnerIconErsteller
         private const string ExpectedFormatVersion = "2";
 
         /// <summary>
+        /// Nur für automatisierte Tests (3. ChatGPT-Gegenprüfung von v2.1.2/v2.1.3,
+        /// Hinweis zu fehlenden Regressionstests): ein echter, wiederholbarer Test für
+        /// einen fehlschlagenden Löschvorgang beim Rollback (z.B. weil ein Virenscanner
+        /// die Datei kurz geöffnet hat) wäre über Datei-Sperren nur zeitabhängig und
+        /// damit unzuverlässig herstellbar. Ist dieser Haken gesetzt und liefert für
+        /// einen Pfad "true", wird in <see cref="UndoSwap"/> statt eines echten
+        /// <see cref="File.Delete(string)"/> deterministisch ein Fehler simuliert. Bleibt
+        /// im normalen Programmbetrieb immer null und hat dann keinerlei Wirkung.
+        /// </summary>
+        internal static Func<string, bool>? TestHook_SimulateDeleteFailure;
+
+        /// <summary>
         /// Setzt das Ordner-Icon als eine einzige Transaktion. Vorhandene
         /// desktop.ini/Icon-Datei/Ordnerattribute werden vor der ersten Änderung
         /// gesichert (siehe <see cref="RemoveFolderIcon"/>). Schlägt irgendein
@@ -700,6 +712,11 @@ namespace OrdnerIconErsteller
             else if (File.Exists(targetPath))
             {
                 ClearAttributesIfExists(targetPath);
+                if (TestHook_SimulateDeleteFailure?.Invoke(targetPath) == true)
+                {
+                    throw new IOException(
+                        $"[Nur Test] Simulierter Löschfehler für \"{targetPath}\".");
+                }
                 File.Delete(targetPath);
             }
         }

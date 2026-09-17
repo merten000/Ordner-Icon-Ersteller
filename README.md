@@ -1,4 +1,43 @@
-# Ordner-Icon-Ersteller (Version 2.1.3 – komplette Neuentwicklung)
+# Ordner-Icon-Ersteller (Version 2.1.4 – komplette Neuentwicklung)
+
+## Regressionstests nach der 4. ChatGPT-Gegenprüfung der KI-Icon-Funktion (v2.1.3 → v2.1.4)
+
+Die 4. ChatGPT-Gegenprüfung von Commit `c01977a` (v2.1.3) fand **keinen neuen
+freigabeblockierenden Fehler** mehr - Build und 44/44 Tests bestätigt, alle 5
+Korrekturen aus der 3. Gegenprüfung technisch bestätigt. Ein nicht
+blockierender Punkt blieb offen: nur die Sperrkonflikt-Korrektur hatte einen
+eigenen Regressionstest, die vier anderen Korrekturen (Rollbackfehler,
+Antwortkörper-Timeout, Bildziel-Begrenzung, Fensterschließen) noch nicht.
+Ergänzt:
+
+- **Rollbackfehler** (`FolderIconServiceTests.cs`): ein echter, wiederholbarer
+  Test über eine externe Datei-Sperre wäre nur zeitabhängig (Race Condition)
+  und damit unzuverlässig - genau wie die bereits dokumentierte
+  Testabdeckungs-Lücke aus v2.0.5. Stattdessen bekam `FolderIconService` einen
+  internen, nur für Tests gedachten Haken (`TestHook_SimulateDeleteFailure`,
+  standardmäßig `null` und im normalen Betrieb ohne jede Wirkung), über den der
+  neue Test `ReplaceGeneratedImageAndSetIcon_RollbackLoeschenSchlaegtOhneVorherigesBildFehl_...`
+  einen fehlschlagenden Löschvorgang beim Rollback deterministisch auslöst und
+  prüft, dass der Fehler jetzt sichtbar wird (statt verschluckt) und die Datei
+  absichtlich liegen bleibt.
+- **Antwortkörper-Timeout** (`AiIconServiceTests.cs`): `ReadResponseTextWithLimitAsync`
+  bekam eine testbare interne Überladung mit explizitem Timeout-Parameter
+  (die eigentliche Anwendung nutzt weiterhin ausschließlich die Überladung mit
+  dem festen 120-Sekunden-Timeout). Ein neuer Test lässt einen nie endenden
+  Test-Stream mit einem sehr kurzen Timeout laufen und prüft, dass der Fehler
+  innerhalb weniger Millisekunden statt erst nach der vollen Zeit geworfen wird.
+- **Bildziel-Begrenzung** (`FolderIconServiceTests.cs`): neuer Test prüft, dass
+  ein Bildziel außerhalb des Zielordners sofort mit `ArgumentException`
+  abgelehnt wird, ohne dass irgendetwas geschrieben wird.
+- **Fensterschließen**: bewusst OHNE automatisierten Test. `OnFormClosing`
+  würde bei laufender KI-Operation einen echten, modalen `MessageBox.Show`-
+  Dialog öffnen - das würde einen automatisierten Testlauf dauerhaft blockieren
+  statt ihn abzuschließen. Dieses Verhalten bleibt eine bewusst dokumentierte
+  Testabdeckungs-Lücke (wie schon die v2.0.5-Lücke) und wurde stattdessen durch
+  Code-Pfad-Analyse verifiziert sowie von Merten praktisch mitgetestet.
+
+`dotnet test` erwartet: 47/47 bestanden (44 vorherige + 3 neue). Gepusht auf
+`v2.0.0-csharp-neuentwicklung`.
 
 ## Änderungen nach der 3. ChatGPT-Gegenprüfung der KI-Icon-Funktion (v2.1.2 → v2.1.3)
 
@@ -563,7 +602,7 @@ Windows-Rechner installiert (kostenlos).
    iscc OrdnerIconErsteller.iss
    ```
 3. Der fertige Installer liegt danach unter
-   `installer\output\OrdnerIconErsteller-Setup-2.1.3.exe`.
+   `installer\output\OrdnerIconErsteller-Setup-2.1.4.exe`.
 
 Bewusste Entscheidungen im Installer-Skript (Details als Kommentare direkt in
 `installer\OrdnerIconErsteller.iss`):

@@ -4,6 +4,8 @@ using System.Drawing.Imaging;
 using System.IO;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
 using Xunit;
 
 namespace OrdnerIconErsteller.Tests
@@ -299,6 +301,65 @@ namespace OrdnerIconErsteller.Tests
 
             Assert.Throws<InvalidOperationException>(
                 () => AiIconService.DecodeAndReencodeAsPng(AiImageProvider.Google, zuGross));
+        }
+
+        /// <summary>
+        /// Ein Stream, dessen ReadAsync niemals von selbst zurückkehrt, sondern nur auf
+        /// Abbruch über den übergebenen CancellationToken reagiert - simuliert eine
+        /// Netzwerkverbindung, die nach den HTTP-Headern hängen bleibt (genau das im 3.
+        /// ChatGPT-Prüfbericht beschriebene Szenario: ResponseHeadersRead deckt nur die
+        /// Header ab, das anschließende Lesen des Bodys konnte vorher unbegrenzt hängen).
+        /// </summary>
+        private sealed class NieEndenderStream : Stream
+        {
+            public override bool CanRead => true;
+            public override bool CanSeek => false;
+            public override bool CanWrite => false;
+            public override long Length => throw new NotSupportedException();
+            public override long Position
+            {
+                get => throw new NotSupportedException();
+                set => throw new NotSupportedException();
+            }
+
+            public override void Flush() { }
+            public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+            public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+            public override void SetLength(long value) => throw new NotSupportedException();
+            public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+            public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+            {
+                // Wartet absichtlich unbegrenzt - kehrt ausschließlich über eine
+                // OperationCanceledException zurück, sobald der Timeout-Token abläuft.
+                await Task.Delay(Timeout.Infinite, cancellationToken).ConfigureAwait(false);
+                return 0;
+            }
+        }
+
+        [Fact]
+        public async Task ReadResponseTextWithLimitAsync_AntwortkoerperHaengt_WirftNachTimeoutKlareInvalidOperationException()
+        {
+            // Regressionstest aus der 3. ChatGPT-Gegenprüfung (Freigabeblocker 2): wegen
+            // HttpCompletionOption.ResponseHeadersRead deckte der bisherige
+            // HttpClient.Timeout nur die Zeit bis zu den HTTP-Headern ab - beim
+            // anschließenden Lesen des Antwortkörpers konnte das Programm unbegrenzt
+            // hängen bleiben. Verwendet die testbare Überladung mit einem sehr kurzen
+            // Timeout, damit der Test nicht die echten 120 Sekunden warten muss.
+            using var response = new System.Net.Http.HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new System.Net.Http.StreamContent(new NieEndenderStream()),
+            };
+
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => AiIconService.ReadResponseTextWithLimitAsync(response, TimeSpan.FromMilliseconds(200)));
+            stopwatch.Stop();
+
+            Assert.Contains("innerhalb der zulässigen Zeit", ex.Message);
+            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(10),
+                "Der Timeout-Pfad darf nicht auf den vollen HttpClient-Timeout warten, sondern muss beim " +
+                "übergebenen Lese-Timeout selbst greifen.");
         }
     }
 }

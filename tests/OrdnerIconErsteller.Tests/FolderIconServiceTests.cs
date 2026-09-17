@@ -732,6 +732,34 @@ namespace OrdnerIconErsteller.Tests
         }
 
         [Fact]
+        public void ReplaceGeneratedImageAndSetIcon_BildzielAusserhalbDesZielordners_WirftArgumentExceptionUndSchreibtNichts()
+        {
+            // Regressionstest aus der 3. ChatGPT-Gegenpruefung (kleinerer Punkt): der
+            // übergebene generatedImagePath wurde bisher nie darauf geprüft, ob er
+            // tatsächlich im übergebenen folderPath liegt. Ein abweichender Pfad (z.B.
+            // ein anderer Ordner) muss sofort mit einer ArgumentException abgelehnt
+            // werden, BEVOR irgendetwas geschrieben wird.
+            string targetFolder = Directory.CreateTempSubdirectory("OrdnerIconErsteller_KiZiel_").FullName;
+            string andererOrdner = Directory.CreateTempSubdirectory("OrdnerIconErsteller_AndererOrdner_").FullName;
+            try
+            {
+                string generatedImagePathAusserhalb = Path.Combine(andererOrdner, "Icon-Original (von KI erzeugt).png");
+                byte[] bild = CreateTestPngBytes(Color.Tomato);
+
+                Assert.Throws<ArgumentException>(
+                    () => FolderIconService.ReplaceGeneratedImageAndSetIcon(targetFolder, bild, generatedImagePathAusserhalb));
+
+                Assert.False(File.Exists(generatedImagePathAusserhalb));
+                Assert.Empty(new DirectoryInfo(targetFolder).GetFiles());
+            }
+            finally
+            {
+                TryDeleteDirectory(targetFolder);
+                TryDeleteDirectory(andererOrdner);
+            }
+        }
+
+        [Fact]
         public void ReplaceGeneratedImageAndSetIcon_MehrereAufrufeNacheinanderAufDenselbenOrdner_BleibenKonsistent()
         {
             // Prüft, dass wiederholte Aufrufe (z.B. mehrere KI-Icon-Erzeugungen
@@ -762,6 +790,56 @@ namespace OrdnerIconErsteller.Tests
             }
             finally
             {
+                TryDeleteDirectory(targetFolder);
+            }
+        }
+
+        [Fact]
+        public void ReplaceGeneratedImageAndSetIcon_RollbackLoeschenSchlaegtOhneVorherigesBildFehl_WirftUndLaesstDateiLiegen()
+        {
+            // Regressionstest aus der 3. ChatGPT-Gegenpruefung (Freigabeblocker 1):
+            // schlug beim Zurückrollen (kein vorheriges KI-Bild vorhanden) das Löschen
+            // der gerade erst geschriebenen neuen Bilddatei fehl, wurde dieser Fehler
+            // bisher über die alles abfangende TryDelete-Methode stillschweigend
+            // verschluckt - die Datei blieb trotz angezeigter Fehlermeldung liegen. Ein
+            // echter, wiederholbarer Test über eine externe Datei-Sperre wäre nur
+            // zeitabhängig (Race Condition) und damit unzuverlässig herstellbar - genau
+            // wie die bereits im README dokumentierte Testabdeckungs-Lücke aus v2.0.5.
+            // Stattdessen simuliert der interne Testhaken
+            // FolderIconService.TestHook_SimulateDeleteFailure den Löschfehler
+            // deterministisch, z.B. so, wie ihn ein kurz zugreifender Virenscanner in
+            // der Praxis auslösen könnte.
+            string targetFolder = Directory.CreateTempSubdirectory("OrdnerIconErsteller_KiZiel_").FullName;
+            try
+            {
+                string desktopIniPath = Path.Combine(targetFolder, "desktop.ini");
+                Directory.CreateDirectory(desktopIniPath); // blockiert das Icon-Setzen wie in bestehenden Tests
+
+                string generatedImagePath = Path.Combine(targetFolder, "Icon-Original (von KI erzeugt).png");
+                byte[] bild = CreateTestPngBytes(Color.Tomato);
+
+                FolderIconService.TestHook_SimulateDeleteFailure = path =>
+                    string.Equals(path, generatedImagePath, StringComparison.OrdinalIgnoreCase);
+                try
+                {
+                    var ex = Assert.Throws<AggregateException>(
+                        () => FolderIconService.ReplaceGeneratedImageAndSetIcon(targetFolder, bild, generatedImagePath));
+                    Assert.Contains("nicht entfernt werden", ex.Message);
+                }
+                finally
+                {
+                    FolderIconService.TestHook_SimulateDeleteFailure = null;
+                }
+
+                // Der fehlgeschlagene Rollback muss sichtbar bleiben: die neue,
+                // fehlerhafte Datei bleibt bewusst liegen, statt fälschlich als entfernt
+                // zu gelten.
+                Assert.True(File.Exists(generatedImagePath),
+                    "Nach einem simulierten Löschfehler beim Rollback muss die Datei absichtlich liegen bleiben.");
+            }
+            finally
+            {
+                FolderIconService.TestHook_SimulateDeleteFailure = null;
                 TryDeleteDirectory(targetFolder);
             }
         }
