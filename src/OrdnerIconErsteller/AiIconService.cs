@@ -66,6 +66,15 @@ namespace OrdnerIconErsteller
         // Convert.FromBase64String das komplette Bytearray alloziert.
         private const int MaxBase64Chars = (MaxImageBytes / 3 + 1) * 4 + 4;
 
+        // HttpCompletionOption.ResponseHeadersRead bedeutet, dass HttpClient.Timeout
+        // (oben, 120 Sekunden) nur die Zeit bis zum Eintreffen der HTTP-Header abdeckt -
+        // das anschliessende Einlesen des Antwort-Bodys in ReadResponseTextWithLimitAsync
+        // ist dadurch NICHT mehr zeitlich begrenzt und koennte theoretisch unbegrenzt
+        // haengen bleiben (z.B. bei einer sehr langsamen/stockenden Verbindung). Microsoft
+        // dokumentiert dafuer ausdruecklich einen eigenen CancellationToken beim Lesen des
+        // Streams (ChatGPT-Gegenpruefung von v2.1.2, Freigabeblocker 2).
+        private static readonly TimeSpan ResponseBodyReadTimeout = TimeSpan.FromSeconds(120);
+
         // Sinnvolle Obergrenze fuer die Gesamtpixelzahl eines Icon-Bildes -
         // verhindert z.B. ein absichtlich winziges, aber extrem hochaufgeloestes
         // "Bomben"-Bild.
@@ -486,24 +495,38 @@ namespace OrdnerIconErsteller
                     "Sicherheit abgelehnt, ohne sie vollständig zu laden.");
             }
 
-            await using Stream stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
-            using var buffer = new MemoryStream();
-            byte[] chunk = new byte[81920];
-            long total = 0;
-            int read;
-            while ((read = await stream.ReadAsync(chunk).ConfigureAwait(false)) > 0)
+            // Eigener CancellationToken fuer das Lesen des Bodys - siehe Kommentar bei
+            // ResponseBodyReadTimeout. HttpClient.Timeout allein wuerde diesen Teil wegen
+            // HttpCompletionOption.ResponseHeadersRead nicht mehr abdecken.
+            using var readTimeoutCts = new CancellationTokenSource(ResponseBodyReadTimeout);
+            try
             {
-                total += read;
-                if (total > MaxResponseBytes)
+                await using Stream stream = await response.Content.ReadAsStreamAsync(readTimeoutCts.Token).ConfigureAwait(false);
+                using var buffer = new MemoryStream();
+                byte[] chunk = new byte[81920];
+                long total = 0;
+                int read;
+                while ((read = await stream.ReadAsync(chunk, readTimeoutCts.Token).ConfigureAwait(false)) > 0)
                 {
-                    throw new InvalidOperationException(
-                        $"Die Antwort überschreitet die zulässige Größe von {MaxResponseBytes / 1024 / 1024} MB " +
-                        "und wurde zur Sicherheit abgebrochen, bevor sie vollständig geladen wurde.");
+                    total += read;
+                    if (total > MaxResponseBytes)
+                    {
+                        throw new InvalidOperationException(
+                            $"Die Antwort überschreitet die zulässige Größe von {MaxResponseBytes / 1024 / 1024} MB " +
+                            "und wurde zur Sicherheit abgebrochen, bevor sie vollständig geladen wurde.");
+                    }
+                    buffer.Write(chunk, 0, read);
                 }
-                buffer.Write(chunk, 0, read);
-            }
 
-            return Encoding.UTF8.GetString(buffer.GetBuffer(), 0, (int)buffer.Length);
+                return Encoding.UTF8.GetString(buffer.GetBuffer(), 0, (int)buffer.Length);
+            }
+            catch (OperationCanceledException) when (readTimeoutCts.IsCancellationRequested)
+            {
+                throw new InvalidOperationException(
+                    "Die Antwort wurde nicht innerhalb der zulässigen Zeit vollständig empfangen " +
+                    $"(Zeitüberschreitung nach {ResponseBodyReadTimeout.TotalSeconds:0} Sekunden beim Lesen " +
+                    "des Antwortkörpers).");
+            }
         }
 
         private static string ExtractOpenAiError(string responseText)

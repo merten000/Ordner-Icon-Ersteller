@@ -732,16 +732,15 @@ namespace OrdnerIconErsteller.Tests
         }
 
         [Fact]
-        public void ReplaceGeneratedImageAndSetIcon_ZweiSequenzielleAufrufeAufDenselbenOrdner_SerialisierenSichSauber()
+        public void ReplaceGeneratedImageAndSetIcon_MehrereAufrufeNacheinanderAufDenselbenOrdner_BleibenKonsistent()
         {
-            // Deckt Prüfbericht Punkt 2 ab ("zwei Programminstanzen können dieselbe
-            // PNG-Transaktion gleichzeitig verändern"): RunExclusive verwendet eine
-            // per-Prozess-unabhängige Sperrdatei (FileShare.None), daher genügt es
-            // hier, zwei Aufrufe direkt nacheinander auf denselben Ordner
-            // auszuführen und zu prüfen, dass am Ende ein konsistenter Endzustand
-            // ohne liegen gebliebene Sperr-/Temp-/Sicherungsdateien vorliegt - ein
-            // echter Test mit zwei parallelen Prozessen ist im Rahmen eines
-            // Unittests nicht sinnvoll abbildbar.
+            // Prüft, dass wiederholte Aufrufe (z.B. mehrere KI-Icon-Erzeugungen
+            // hintereinander im selben Ordner) am Ende einen konsistenten Zustand ohne
+            // liegen gebliebene Transaktions-Temp-/Sicherungsdateien hinterlassen. Das
+            // eigentliche gleichzeitige Zugreifen zweier Instanzen auf denselben Ordner
+            // prüft separat der echte Konkurrenztest unten
+            // (ReplaceGeneratedImageAndSetIcon_WaehrendAndereInstanzDenOrdnerSperrt_...) -
+            // dieser Test hier deckt nur den sequenziellen Wiederholungsfall ab.
             string targetFolder = Directory.CreateTempSubdirectory("OrdnerIconErsteller_KiZiel_").FullName;
             try
             {
@@ -760,6 +759,43 @@ namespace OrdnerIconErsteller.Tests
                 // oder Sicherungsdateien.
                 Assert.Empty(new DirectoryInfo(targetFolder).GetFiles("*.ai-icon.tmp*"));
                 Assert.Empty(new DirectoryInfo(targetFolder).GetFiles("*.ai-icon.safety*"));
+            }
+            finally
+            {
+                TryDeleteDirectory(targetFolder);
+            }
+        }
+
+        [Fact]
+        public void ReplaceGeneratedImageAndSetIcon_WaehrendAndereInstanzDenOrdnerSperrt_WirftSofortKlarenFehlerUndBleibtDanachFunktionsfaehig()
+        {
+            // Echter Konkurrenztest (ChatGPT-Gegenprüfung von v2.1.2, Punkt 4): der
+            // bisherige "Konkurrenztest" für die KI-Icon-PNG-Transaktion führte die
+            // Aufrufe nur sequenziell aus und prüfte damit nie, ob RunExclusive eine
+            // WIRKLICH gleichzeitig laufende zweite Instanz tatsächlich abweist - genau
+            // wie beim analogen, bereits bestehenden Test für SetFolderIcon
+            // (Set_WaehrendAndereInstanzDenOrdnerSperrt_...) wird hier die Sperrdatei
+            // von "außen" gehalten, während ReplaceGeneratedImageAndSetIcon versucht,
+            // denselben Ordner zu bearbeiten.
+            string targetFolder = Directory.CreateTempSubdirectory("OrdnerIconErsteller_KiZiel_").FullName;
+            try
+            {
+                string generatedImagePath = Path.Combine(targetFolder, "Icon-Original (von KI erzeugt).png");
+                string lockPath = Path.Combine(targetFolder, ".ordnericonersteller.lock");
+                byte[] bild = CreateTestPngBytes(Color.Tomato);
+
+                using (new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+                {
+                    Assert.Throws<IOException>(
+                        () => FolderIconService.ReplaceGeneratedImageAndSetIcon(targetFolder, bild, generatedImagePath));
+                }
+
+                Assert.False(File.Exists(generatedImagePath),
+                    "Während die Sperre gehalten wird, darf keine Änderung stattfinden.");
+
+                // Nach Freigabe der Sperre muss der Vorgang ganz normal funktionieren.
+                FolderIconService.ReplaceGeneratedImageAndSetIcon(targetFolder, bild, generatedImagePath);
+                Assert.Equal(bild, File.ReadAllBytes(generatedImagePath));
             }
             finally
             {

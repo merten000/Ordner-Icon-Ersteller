@@ -1,4 +1,55 @@
-# Ordner-Icon-Ersteller (Version 2.1.2 – komplette Neuentwicklung)
+# Ordner-Icon-Ersteller (Version 2.1.3 – komplette Neuentwicklung)
+
+## Änderungen nach der 3. ChatGPT-Gegenprüfung der KI-Icon-Funktion (v2.1.2 → v2.1.3)
+
+Die Gegenprüfung von Commit `94906d2` bestätigte 43/43 bestandene Tests, einen
+fehlerfreien Build und saubere Credential-Manager-Korrekturen, fand aber 3
+freigabeblockierende Punkte sowie 2 weitere, nicht blockierende Punkte. Alle
+wurden behoben:
+
+1. **Rollbackfehler wurde verschluckt** (`FolderIconService.cs`): War beim
+   Zurückrollen kein altes KI-Bild vorhanden und ließ sich das neu
+   geschriebene, fehlerhafte Bild nicht löschen, hat `UndoSwap` diesen
+   Löschfehler bisher über die alles abfangende Aufräum-Methode `TryDelete`
+   stillschweigend verschluckt – das Bild blieb trotz angezeigter
+   Fehlermeldung liegen. `UndoSwap` löscht jetzt in diesem Fall direkt über
+   `File.Delete` (das echte Ausnahmen wirft), sodass ein fehlgeschlagener
+   Rollback korrekt als Fehler bei der Sicherungswiederherstellung erkannt
+   und gemeldet wird. Die Fehlermeldung in
+   `ReplaceGeneratedImageAndSetIconLocked` unterscheidet dabei jetzt korrekt,
+   ob überhaupt ein vorheriges Bild vorhanden war.
+2. **Kein wirksamer Timeout beim Lesen des Antwortkörpers**
+   (`AiIconService.cs`): Durch `HttpCompletionOption.ResponseHeadersRead`
+   deckte der bisherige `HttpClient.Timeout` von 120 Sekunden nur die Zeit
+   bis zum Empfang der HTTP-Header ab – beim anschließenden Einlesen des
+   Antwortkörpers konnte das Programm unbegrenzt hängen bleiben.
+   `ReadResponseTextWithLimitAsync` verwendet jetzt einen eigenen,
+   auf 120 Sekunden begrenzten `CancellationToken` für das Lesen des
+   Antwortkörpers, genau wie von Microsoft für dieses Szenario empfohlen.
+3. **Fenster ließ sich während der Transaktion schließen** (`MainForm.cs`):
+   Während `GenerateAiIconAsync` lief, konnte das Programmfenster
+   geschlossen werden, wodurch der Prozess mitten im Datei-Commit hätte
+   enden können, noch bevor Rollback und `finally` ausgeführt wurden. Ein
+   neues Feld `_aiOperationInProgress` sowie eine `OnFormClosing`-Behandlung
+   verhindern jetzt das Schließen des Fensters, solange eine KI-Icon-Erzeugung
+   läuft, und zeigen stattdessen einen klaren Hinweis an.
+
+Nicht blockierende, ebenfalls behobene Punkte:
+
+- **Sequenzieller Test prüfte keine echte Konkurrenz**
+  (`FolderIconServiceTests.cs`): Der bisherige Test mit fünf sequenziellen
+  Aufrufen wurde umbenannt und beschreibt jetzt korrekt, dass er nur
+  wiederholte, nacheinander laufende Aufrufe abdeckt. Ein neuer Test hält die
+  ordnerspezifische Sperrdatei extern, ruft `ReplaceGeneratedImageAndSetIcon`
+  währenddessen auf und prüft, dass sofort ein klarer `IOException`-Fehler
+  geworfen wird, keine Datei verändert wurde und die Methode danach wieder
+  normal funktioniert – nach demselben, bereits vorhandenen Muster wie der
+  entsprechende Test für `SetFolderIcon`.
+- **Bildziel war nicht auf den Zielordner begrenzt** (`FolderIconService.cs`):
+  `ReplaceGeneratedImageAndSetIcon` prüft jetzt, dass der übergebene
+  `generatedImagePath` tatsächlich im übergebenen `folderPath` liegt, bevor
+  irgendetwas geschrieben wird, und wirft andernfalls eine
+  `ArgumentException`.
 
 ## Änderungen nach der 2. ChatGPT-Gegenprüfung der KI-Icon-Funktion (v2.1.1 → v2.1.2)
 
@@ -512,7 +563,7 @@ Windows-Rechner installiert (kostenlos).
    iscc OrdnerIconErsteller.iss
    ```
 3. Der fertige Installer liegt danach unter
-   `installer\output\OrdnerIconErsteller-Setup-2.1.2.exe`.
+   `installer\output\OrdnerIconErsteller-Setup-2.1.3.exe`.
 
 Bewusste Entscheidungen im Installer-Skript (Details als Kommentare direkt in
 `installer\OrdnerIconErsteller.iss`):

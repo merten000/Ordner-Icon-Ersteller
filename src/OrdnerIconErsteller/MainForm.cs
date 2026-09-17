@@ -33,6 +33,13 @@ namespace OrdnerIconErsteller
             Font = new Font("Consolas", 9f)
         };
 
+        // Waehrend eine KI-Icon-Transaktion laeuft (Netzwerkanfrage + anschliessendes
+        // Schreiben/Icon-Setzen in FolderIconService), darf das Fenster nicht
+        // geschlossen werden: ein Prozessende mitten im Datei-Commit wuerde Rollback
+        // und finally-Bloecke in FolderIconService moeglicherweise nie ausfuehren
+        // (ChatGPT-Gegenpruefung von v2.1.2, Freigabeblocker 3).
+        private bool _aiOperationInProgress;
+
         public MainForm(string? startFolder)
         {
             Text = "Ordner-Icon-Ersteller";
@@ -411,6 +418,7 @@ namespace OrdnerIconErsteller
             string generatedImagePath = Path.Combine(targetFolder, "Icon-Original (von KI erzeugt).png");
 
             SetAiOperationControlsEnabled(false);
+            _aiOperationInProgress = true;
             Cursor = Cursors.WaitCursor;
             try
             {
@@ -452,6 +460,7 @@ namespace OrdnerIconErsteller
             {
                 Cursor = Cursors.Default;
                 SetAiOperationControlsEnabled(true);
+                _aiOperationInProgress = false;
             }
         }
 
@@ -467,6 +476,29 @@ namespace OrdnerIconErsteller
             _btnBrowseFolder.Enabled = enabled;
             _btnSetIcon.Enabled = enabled;
             _btnRemoveIcon.Enabled = enabled;
+        }
+
+        /// <summary>
+        /// Verhindert, dass das Fenster (und damit der ganze Prozess) waehrend einer
+        /// laufenden KI-Icon-Transaktion geschlossen wird - siehe
+        /// <see cref="_aiOperationInProgress"/>. Ein Benutzer-Klick auf "X" waehrend
+        /// der Wartezeit wuerde sonst den Prozess mitten in FolderIconService.
+        /// ReplaceGeneratedImageAndSetIcon beenden koennen, bevor deren Rollback-/
+        /// finally-Logik greifen kann.
+        /// </summary>
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            if (_aiOperationInProgress)
+            {
+                e.Cancel = true;
+                MessageBox.Show(this,
+                    "Gerade läuft noch eine KI-Icon-Erzeugung. Bitte warten, bis sie abgeschlossen ist, " +
+                    "bevor das Programm beendet wird.",
+                    "Vorgang läuft noch", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            base.OnFormClosing(e);
         }
 
         private void RefreshMenuStatus()

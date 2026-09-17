@@ -296,6 +296,24 @@ namespace OrdnerIconErsteller
             if (string.IsNullOrWhiteSpace(generatedImagePath))
                 throw new ArgumentException("Es wurde kein Zielpfad für die Bilddatei übergeben.", nameof(generatedImagePath));
 
+            // Verteidigung in der Tiefe: generatedImagePath kommt vom Aufrufer (aktuell
+            // immer per Path.Combine mit folderPath gebildet), wurde hier bisher aber nie
+            // selbst geprüft. Ein künftiger oder fehlerhafter Aufrufer könnte sonst
+            // versehentlich (oder über einen manipulierten Prompt/Dateinamen mit "..")
+            // eine Datei außerhalb des eigentlich gesperrten Zielordners schreiben lassen.
+            string normalizedFolder = Path.GetFullPath(folderPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string normalizedImagePath = Path.GetFullPath(generatedImagePath);
+            string? imageDirectory = Path.GetDirectoryName(normalizedImagePath);
+            if (imageDirectory is null
+                || !string.Equals(imageDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                    normalizedFolder, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ArgumentException(
+                    $"Der Zielpfad für die Bilddatei (\"{normalizedImagePath}\") liegt nicht direkt im " +
+                    $"Zielordner (\"{normalizedFolder}\") - aus Sicherheitsgründen wird nichts geschrieben.",
+                    nameof(generatedImagePath));
+            }
+
             RunExclusive(folderPath, () => ReplaceGeneratedImageAndSetIconLocked(folderPath, imageBytes, generatedImagePath));
         }
 
@@ -335,17 +353,27 @@ namespace OrdnerIconErsteller
                         }
                         catch (Exception undoEx)
                         {
-                            // Wie bei SwapIntoPlace/SwapFromBackupIntoPlace: auch die
-                            // Selbstheilung ist gescheitert - die vorherige Datei
-                            // liegt jetzt nur noch unter imageSafety und MUSS dort
-                            // bewusst erhalten bleiben, unabhängig vom
-                            // "geswapt"-Flag oben.
+                            // Entweder ist die interne Selbstheilung aus SwapIntoPlace
+                            // gescheitert (die vorherige Datei liegt dann nur noch unter
+                            // imageSafety), oder es gab vorher gar keine Datei und das
+                            // Entfernen der gerade erst eingesetzten neuen Datei ist
+                            // fehlgeschlagen (z.B. weil sie gerade von einem
+                            // Virenscanner geöffnet ist). In beiden Fällen darf
+                            // imageSafety nicht als "nicht mehr benötigt" gelöscht
+                            // werden, und der Fehler muss sichtbar bleiben statt eines
+                            // fälschlich als vollständig geltenden Rollbacks.
                             imageSafetyMustBePreserved = true;
+                            bool hadPreviousImage = File.Exists(imageSafety);
+                            string detail = hadPreviousImage
+                                ? $"das vorherige \"Icon-Original\" konnte aus \"{imageSafety}\" nicht " +
+                                  "automatisch zurückgeholt werden. Die Datei bleibt dort bewusst erhalten"
+                                : $"die gerade erst geschriebene neue Bilddatei \"{generatedImagePath}\" " +
+                                  "konnte beim Zurückrollen nicht entfernt werden. Sie bleibt trotz dieser " +
+                                  "Fehlermeldung dort liegen";
                             throw new AggregateException(
-                                $"Das Setzen des KI-Icons ist fehlgeschlagen, und das vorherige " +
-                                $"\"Icon-Original\" konnte aus \"{imageSafety}\" nicht automatisch " +
-                                "zurückgeholt werden. Die Datei bleibt dort bewusst erhalten - bitte " +
-                                "manuell prüfen.",
+                                $"Das Setzen des KI-Icons ist fehlgeschlagen, und das automatische " +
+                                $"Zurückrollen konnte nicht vollständig abgeschlossen werden: {detail} - " +
+                                "bitte manuell prüfen.",
                                 new[] { primary, undoEx });
                         }
                     }
@@ -650,12 +678,29 @@ namespace OrdnerIconErsteller
             }
         }
 
+        /// <summary>
+        /// Macht einen erfolgreichen <see cref="SwapIntoPlace"/> rückgängig. Existierte
+        /// vorher eine Datei an <paramref name="targetPath"/>, liegt sie jetzt unter
+        /// <paramref name="safetyPath"/> und wird zurückgeholt. Existierte vorher NICHTS,
+        /// muss die gerade erst eingesetzte neue Datei wieder entfernt werden - bewusst
+        /// über <see cref="File.Delete(string)"/> statt <see cref="TryDelete"/>: Ein
+        /// stillschweigend verschlucktes Löschfehlschlagen (z.B. weil die Datei gerade
+        /// von einem Virenscanner oder der Vorschau geöffnet ist) hätte dazu geführt,
+        /// dass der Aufrufer fälschlich ein vollständiges Zurückrollen annimmt, obwohl
+        /// die neue Datei trotz Fehlermeldung liegen bleibt (ChatGPT-Gegenprüfung von
+        /// v2.1.2, Freigabeblocker 1).
+        /// </summary>
         private static void UndoSwap(string targetPath, string safetyPath)
         {
-            TryDelete(targetPath);
             if (File.Exists(safetyPath))
             {
+                ClearAttributesIfExists(targetPath);
                 File.Move(safetyPath, targetPath, overwrite: true);
+            }
+            else if (File.Exists(targetPath))
+            {
+                ClearAttributesIfExists(targetPath);
+                File.Delete(targetPath);
             }
         }
 
