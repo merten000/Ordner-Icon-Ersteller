@@ -302,23 +302,36 @@ namespace OrdnerIconErsteller
         /// bereits geschriebene Bilddatei trotzdem erhalten - anders als früher wird
         /// sie NICHT mehr zurückgerollt/gelöscht, damit ein erzeugtes Bild nie allein
         /// wegen eines fehlgeschlagenen Icon-Schritts verloren geht.
+        ///
+        /// Pruefbericht v2.2.0 (P1: "Zwei gleichzeitig laufende Programminstanzen
+        /// können denselben angeblich eindeutigen Dateinamen auswählen"):
+        /// <paramref name="preferredImagePath"/> ist nur noch ein WUNSCH-Dateiname
+        /// (vom Aufrufer per Zeitstempel gebildet, siehe
+        /// MainForm.BuildUniqueAiIconImagePath) - die tatsächliche Eindeutigkeit wird
+        /// erst HIER, innerhalb derselben ordnerweiten Sperre wie das eigentliche
+        /// Schreiben, endgültig festgestellt. Kollidiert der Wunsch-Dateiname
+        /// zwischenzeitlich doch mit einem bereits vorhandenen Bild (z.B. weil eine
+        /// zweite, ebenfalls schon bezahlte Erzeugung im selben Ordner minimal früher
+        /// fertig wurde), wird automatisch auf einen neuen, ebenfalls eindeutigen
+        /// Dateinamen ausgewichen, statt das bereits erzeugte Bild zu verwerfen. Der
+        /// tatsächlich verwendete Pfad wird zurückgegeben.
         /// </summary>
-        public static void ReplaceGeneratedImageAndSetIcon(string folderPath, byte[] imageBytes, string generatedImagePath)
+        public static string ReplaceGeneratedImageAndSetIcon(string folderPath, byte[] imageBytes, string preferredImagePath)
         {
             if (!Directory.Exists(folderPath))
                 throw new DirectoryNotFoundException($"Ordner nicht gefunden: {folderPath}");
             if (imageBytes is null || imageBytes.Length == 0)
                 throw new ArgumentException("Es wurden keine Bilddaten übergeben.", nameof(imageBytes));
-            if (string.IsNullOrWhiteSpace(generatedImagePath))
-                throw new ArgumentException("Es wurde kein Zielpfad für die Bilddatei übergeben.", nameof(generatedImagePath));
+            if (string.IsNullOrWhiteSpace(preferredImagePath))
+                throw new ArgumentException("Es wurde kein Zielpfad für die Bilddatei übergeben.", nameof(preferredImagePath));
 
-            // Verteidigung in der Tiefe: generatedImagePath kommt vom Aufrufer (aktuell
+            // Verteidigung in der Tiefe: preferredImagePath kommt vom Aufrufer (aktuell
             // immer per Path.Combine mit folderPath gebildet), wurde hier bisher aber nie
             // selbst geprüft. Ein künftiger oder fehlerhafter Aufrufer könnte sonst
             // versehentlich (oder über einen manipulierten Prompt/Dateinamen mit "..")
             // eine Datei außerhalb des eigentlich gesperrten Zielordners schreiben lassen.
             string normalizedFolder = Path.GetFullPath(folderPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            string normalizedImagePath = Path.GetFullPath(generatedImagePath);
+            string normalizedImagePath = Path.GetFullPath(preferredImagePath);
             string? imageDirectory = Path.GetDirectoryName(normalizedImagePath);
             if (imageDirectory is null
                 || !string.Equals(imageDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
@@ -327,32 +340,31 @@ namespace OrdnerIconErsteller
                 throw new ArgumentException(
                     $"Der Zielpfad für die Bilddatei (\"{normalizedImagePath}\") liegt nicht direkt im " +
                     $"Zielordner (\"{normalizedFolder}\") - aus Sicherheitsgründen wird nichts geschrieben.",
-                    nameof(generatedImagePath));
+                    nameof(preferredImagePath));
             }
 
-            RunExclusive(folderPath, () => ReplaceGeneratedImageAndSetIconLocked(folderPath, imageBytes, generatedImagePath));
+            string? actualImagePath = null;
+            RunExclusive(folderPath, () =>
+                actualImagePath = ReplaceGeneratedImageAndSetIconLocked(folderPath, imageBytes, normalizedImagePath));
+            return actualImagePath!;
         }
 
-        private static void ReplaceGeneratedImageAndSetIconLocked(string folderPath, byte[] imageBytes, string generatedImagePath)
+        private static string ReplaceGeneratedImageAndSetIconLocked(string folderPath, byte[] imageBytes, string preferredImagePath)
         {
-            if (File.Exists(generatedImagePath))
-            {
-                // Sollte durch den eindeutigen (zeitstempelbasierten) Dateinamen des
-                // Aufrufers praktisch nie vorkommen - trotzdem zur Sicherheit: nie
-                // stillschweigend eine vorhandene Datei überschreiben.
-                throw new InvalidOperationException(
-                    $"Es existiert bereits eine Datei unter \"{generatedImagePath}\" - es wird nichts " +
-                    "überschrieben. Bitte das Icon erneut erzeugen.");
-            }
+            // Die eigentliche Eindeutigkeits-Entscheidung passiert erst hier, innerhalb
+            // derselben Sperre wie das anschließende Schreiben - siehe Erläuterung an
+            // ReplaceGeneratedImageAndSetIcon oben.
+            string finalImagePath = ReserveUniqueImagePath(preferredImagePath);
 
             string tempImage = UniqueTempPath(folderPath, ".ai-icon.tmp");
             try
             {
                 File.WriteAllBytes(tempImage, imageBytes);
                 // Umbenennen (kein Copy-Overwrite) - auf demselben Volume praktisch
-                // unteilbar, und da generatedImagePath nachweislich noch nicht
-                // existiert, kann hier nichts überschrieben werden.
-                File.Move(tempImage, generatedImagePath);
+                // unteilbar, und da finalImagePath innerhalb derselben Sperre gerade erst
+                // als nicht-existent festgestellt wurde, kann hier nichts überschrieben
+                // werden.
+                File.Move(tempImage, finalImagePath);
             }
             finally
             {
@@ -364,7 +376,37 @@ namespace OrdnerIconErsteller
             // SetFolderIconLocked hat für Icon.ico/desktop.ini bereits sein eigenes,
             // vollständiges Rollback; die gerade geschriebene Bilddatei ist davon
             // unabhängig und wird hier bewusst NICHT mehr zurückgerollt.
-            SetFolderIconLocked(folderPath, generatedImagePath);
+            SetFolderIconLocked(folderPath, finalImagePath);
+            return finalImagePath;
+        }
+
+        /// <summary>
+        /// Liefert <paramref name="preferredPath"/> unverändert zurück, falls er noch
+        /// nicht existiert - andernfalls einen neuen, ebenfalls noch nicht
+        /// existierenden Pfad im selben Ordner mit angehängtem Zähler-Suffix. Läuft
+        /// immer innerhalb von <see cref="RunExclusive"/>, ist also für genau diesen
+        /// Ordner nie mit einem gleichzeitigen Aufruf einer anderen Programminstanz
+        /// konfrontiert.
+        /// </summary>
+        private static string ReserveUniqueImagePath(string preferredPath)
+        {
+            if (!File.Exists(preferredPath))
+            {
+                return preferredPath;
+            }
+
+            string directory = Path.GetDirectoryName(preferredPath) ?? ".";
+            string extension = Path.GetExtension(preferredPath);
+            string baseName = Path.GetFileNameWithoutExtension(preferredPath);
+
+            int suffix = 2;
+            string candidate;
+            do
+            {
+                candidate = Path.Combine(directory, $"{baseName} ({suffix}){extension}");
+                suffix++;
+            } while (File.Exists(candidate));
+            return candidate;
         }
 
         /// <summary>

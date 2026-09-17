@@ -396,7 +396,17 @@ namespace OrdnerIconErsteller
                 FolderContentScanner.ScanResult scan;
                 try
                 {
-                    scan = FolderContentScanner.Scan(targetFolder);
+                    // Referenzbild nur suchen/erwaehnen, wenn der gewaehlte Anbieter es
+                    // ueberhaupt entgegennimmt - siehe FolderContentScanner.Scan (Pruefbericht
+                    // v2.2.0: "bei OpenAI behauptet der Prompt, ein Referenzbild werde
+                    // mitgesendet, obwohl OpenAI es vollstaendig verwirft").
+                    //
+                    // Laeuft in einem Thread-Pool-Thread (Pruefbericht v2.2.0, weiterer
+                    // Fehler: "Der Ordner-Scan läuft auf dem UI-Thread") - bei einem sehr
+                    // grossen Ordner oder einem langsamen Netzlaufwerk wuerde ein
+                    // synchroner Aufruf hier sonst das Fenster einfrieren lassen.
+                    bool allowReferenceImage = provider == AiImageProvider.Google;
+                    scan = await Task.Run(() => FolderContentScanner.Scan(targetFolder, allowReferenceImage));
                 }
                 catch (Exception ex)
                 {
@@ -460,7 +470,11 @@ namespace OrdnerIconErsteller
             // eine evtl. schon vorhandene Datei zu ersetzen - siehe
             // BuildUniqueAiIconImagePath. Ältere Versionen bleiben dadurch zum
             // Vergleichen im Ordner liegen, bis der Benutzer sie selbst löscht.
-            string generatedImagePath = BuildUniqueAiIconImagePath(targetFolder);
+            // Nur ein WUNSCH-Dateiname - FolderIconService entscheidet die tatsaechliche
+            // Eindeutigkeit endgueltig innerhalb seiner ordnerweiten Sperre (siehe dortige
+            // Erlaeuterung, Pruefbericht v2.2.0 P1) und liefert unten den tatsaechlich
+            // verwendeten Pfad zurueck.
+            string preferredImagePath = BuildUniqueAiIconImagePath(targetFolder);
 
             SetAiOperationControlsEnabled(false);
             _aiOperationInProgress = true;
@@ -486,7 +500,8 @@ namespace OrdnerIconErsteller
                 // bereits mehrfach gepruefte Sicherungs-/Rollback-Bausteine wie
                 // Icon.ico/desktop.ini. Läuft in einem Thread-Pool-Thread, weil es
                 // sich um blockierende Datei-I/O (kein async I/O) handelt.
-                await Task.Run(() => FolderIconService.ReplaceGeneratedImageAndSetIcon(targetFolder, imageBytes, generatedImagePath));
+                string generatedImagePath = await Task.Run(
+                    () => FolderIconService.ReplaceGeneratedImageAndSetIcon(targetFolder, imageBytes, preferredImagePath));
 
                 _txtImage.Text = generatedImagePath;
 
@@ -510,13 +525,21 @@ namespace OrdnerIconErsteller
         }
 
         /// <summary>
-        /// Baut einen garantiert noch nicht existierenden Dateinamen für ein neu zu
-        /// erzeugendes KI-Icon im Zielordner (Merten-Feedback nach v2.1.4: "Icon ohne
-        /// Überschreiben" - jede Erzeugung bekommt ihre eigene Datei, ältere Versionen
-        /// bleiben zum Vergleichen erhalten). Zeitstempel bis auf die Sekunde genau
-        /// sorgt für eine sprechende, nach Erzeugungszeit sortierbare Reihenfolge; ein
-        /// zusätzliches Suffix deckt den (praktisch nie vorkommenden) Fall ab, dass
-        /// zweimal innerhalb derselben Sekunde erzeugt wird.
+        /// Baut einen zum Zeitpunkt des Aufrufs noch nicht existierenden WUNSCH-
+        /// Dateinamen für ein neu zu erzeugendes KI-Icon im Zielordner (Merten-Feedback
+        /// nach v2.1.4: "Icon ohne Überschreiben" - jede Erzeugung bekommt ihre eigene
+        /// Datei, ältere Versionen bleiben zum Vergleichen erhalten). Zeitstempel bis
+        /// auf die Sekunde genau sorgt für eine sprechende, nach Erzeugungszeit
+        /// sortierbare Reihenfolge; ein zusätzliches Suffix deckt den (praktisch nie
+        /// vorkommenden) Fall ab, dass zweimal innerhalb derselben Sekunde erzeugt wird.
+        ///
+        /// Diese Prüfung hier dient nur der Anzeige/Protokollierung VOR der
+        /// eigentlichen (u.U. 20-120 Sekunden dauernden) KI-Anfrage - sie ist NICHT
+        /// die endgültige Eindeutigkeits-Garantie. Die entscheidet erst
+        /// FolderIconService.ReplaceGeneratedImageAndSetIcon innerhalb seiner
+        /// ordnerweiten Sperre (Pruefbericht v2.2.0, P1), damit zwei nahezu
+        /// gleichzeitig gestartete Erzeugungen im selben Ordner nicht denselben Namen
+        /// "gewinnen" und eine davon verloren geht.
         /// </summary>
         private static string BuildUniqueAiIconImagePath(string targetFolder)
         {

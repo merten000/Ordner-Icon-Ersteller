@@ -1,4 +1,56 @@
-# Ordner-Icon-Ersteller (Version 2.2.0 – komplette Neuentwicklung)
+# Ordner-Icon-Ersteller (Version 2.2.1 – komplette Neuentwicklung)
+
+## 6. ChatGPT-Gegenprüfung behoben (v2.2.0 → v2.2.1)
+
+Die 6. ChatGPT-Gegenprüfung (Commit fcf5a31, v2.2.0) fand 3 Freigabeblocker
+und 2 weitere Fehler bei den beiden neuen "Icon ohne Text"/"Icon ohne
+Überschreiben"-Funktionen:
+
+1. **Zustimmungshinweis deckte neuen Umfang nicht ab** (`AiConsentService.cs`):
+   Der Hinweis erwähnte nur den eingegebenen Text (Prompt). Seit v2.2.0 werden
+   bei leerem Prompt zusätzlich Ordner-/Dateinamen und bei Google ein
+   vorhandenes Bild aus dem Ordner übertragen, ohne dass der Hinweis das
+   erwähnte. Eine bereits gespeicherte alte Zustimmung hätte das nie mehr
+   angezeigt. Der Hinweistext wurde entsprechend ergänzt, und eine neue
+   Versionsnummer (`CurrentConsentVersion`) sorgt dafür, dass eine früher unter
+   der alten Fassung gespeicherte Zustimmung nicht mehr zählt - der
+   aktualisierte Hinweis erscheint dadurch einmalig erneut.
+2. **Dateiname wurde vor der ordnerweiten Sperre reserviert**
+   (`FolderIconService.cs`, `MainForm.cs`): Zwei nahezu gleichzeitig gestartete
+   Erzeugungen im selben Ordner konnten denselben, vorab per Zeitstempel
+   berechneten "eindeutigen" Dateinamen wählen; die zweite, ebenfalls bereits
+   bezahlte Erzeugung wurde beim Schreiben dann komplett verworfen
+   (`InvalidOperationException`). `ReplaceGeneratedImageAndSetIcon` erhält jetzt
+   nur noch einen WUNSCH-Dateinamen und entscheidet die tatsächliche
+   Eindeutigkeit erst innerhalb derselben Sperre wie das Schreiben selbst -
+   bei einer Kollision wird automatisch ein neuer Dateiname gewählt, statt das
+   Bild zu verlieren. Der tatsächlich verwendete Pfad wird zurückgegeben.
+3. **Referenzbild wurde nicht als Bild validiert** (`AiIconService.cs`):
+   `LoadReferenceImage` prüfte bisher weder Größe noch Bildgültigkeit selbst
+   (nur der aufrufende `FolderContentScanner` tat das). Jetzt begrenzt die
+   Methode die Dateigröße selbst (15 MB) und dekodiert die Datei tatsächlich
+   als Bild, bevor sie an Google geschickt wird; der MIME-Typ kommt danach vom
+   erkannten Bildformat statt blind von der Dateiendung.
+4. **OpenAI-Prompt behauptete fälschlich eine Bildübertragung**
+   (`FolderContentScanner.cs`, `MainForm.cs`): Der Hinweis auf ein
+   mitgeliefertes Referenzbild stand bisher unabhängig vom gewählten Anbieter
+   im Prompt-Text, obwohl OpenAI kein Bild entgegennimmt und es vollständig
+   verwirft. `FolderContentScanner.Scan` bekommt jetzt `allowReferenceImage`
+   vom Aufrufer übergeben (nur `true` bei Google) und erwähnt/liefert ein
+   Referenzbild nur noch dann.
+5. **Ordner-Scan lief auf dem UI-Thread und sammelte trotz 25er-Grenze alle
+   Einträge** (`FolderContentScanner.cs`, `MainForm.cs`): `FolderContentScanner
+   .Scan` läuft jetzt in `GenerateAiIconAsync` per `Task.Run` in einem
+   Thread-Pool-Thread statt auf dem UI-Thread, und die interne Namensliste
+   wird von vornherein bei 25 Einträgen gedeckelt, statt erst alle Einträge
+   gesammelt zu haben und anschließend nur die ersten 25 zu verwenden.
+
+Neue/angepasste Tests dafür in `AiIconServiceTests.cs` (4 neue Tests für
+`LoadReferenceImage`), `FolderContentScannerTests.cs` (2 neue Tests für
+`allowReferenceImage` und die 25er-Grenze) und `FolderIconServiceTests.cs`
+(bestehender Test für Punkt 2 umgeschrieben, prüft jetzt das Ausweichen auf
+einen neuen Dateinamen statt der alten Exception). Noch nicht von Merten
+gebaut/getestet - steht noch aus, bevor diese Runde erneut an ChatGPT geht.
 
 ## KI-Icon: "ohne Text" und "ohne Überschreiben" (v2.1.4 → v2.2.0)
 

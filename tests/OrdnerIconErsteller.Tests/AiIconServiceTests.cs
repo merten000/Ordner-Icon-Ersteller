@@ -164,6 +164,77 @@ namespace OrdnerIconErsteller.Tests
             Assert.Equal("ein blaues Quadrat", parts[1].GetProperty("text").GetString());
         }
 
+        // ---- LoadReferenceImage ----------------------------------------------------
+        // Pruefbericht v2.2.0 (P1: "Referenzbild wird nicht als Bild validiert" - bisher
+        // wurden nur Dateiendung und Groesse vom Aufrufer FolderContentScanner geprueft,
+        // LoadReferenceImage selbst weder pruefte noch begrenzte irgendetwas).
+
+        [Fact]
+        public void LoadReferenceImage_GueltigesPng_LiefertBytesUndErkanntenMimeType()
+        {
+            string tempFile = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".png");
+            byte[] pngBytes = CreateValidPngBytes(Color.SeaGreen);
+            File.WriteAllBytes(tempFile, pngBytes);
+            try
+            {
+                AiIconService.ReferenceImage result = AiIconService.LoadReferenceImage(tempFile);
+
+                Assert.Equal(pngBytes, result.Bytes);
+                Assert.Equal("image/png", result.MimeType);
+            }
+            finally
+            {
+                File.Delete(tempFile);
+            }
+        }
+
+        [Fact]
+        public void LoadReferenceImage_UngueltigeBilddatenTrotzBildEndung_WirftInvalidOperationException()
+        {
+            // Eine beliebige Textdatei, nur mit ".png" umbenannt - ohne echte
+            // Bild-Validierung würde das bisher unverändert an Google geschickt.
+            string tempFile = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".png");
+            File.WriteAllBytes(tempFile, Encoding.UTF8.GetBytes("das ist kein Bild, nur Text"));
+            try
+            {
+                var ex = Assert.Throws<InvalidOperationException>(() => AiIconService.LoadReferenceImage(tempFile));
+                Assert.Contains("kein gültiges Bild", ex.Message);
+            }
+            finally
+            {
+                File.Delete(tempFile);
+            }
+        }
+
+        [Fact]
+        public void LoadReferenceImage_DateiZuGross_WirftInvalidOperationExceptionOhneSieEinzulesen()
+        {
+            string tempFile = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".png");
+            try
+            {
+                // Nicht wirklich 15+ MB an Bilddaten erzeugen - eine übergroße, leicht
+                // erkennbare Platzhalterdatei reicht, um die Größenprüfung selbst zu testen.
+                using (var fs = new FileStream(tempFile, FileMode.Create))
+                {
+                    fs.SetLength(16 * 1024 * 1024);
+                }
+
+                var ex = Assert.Throws<InvalidOperationException>(() => AiIconService.LoadReferenceImage(tempFile));
+                Assert.Contains("MB", ex.Message);
+            }
+            finally
+            {
+                File.Delete(tempFile);
+            }
+        }
+
+        [Fact]
+        public void LoadReferenceImage_DateiFehlt_WirftFileNotFoundException()
+        {
+            string missingPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".png");
+            Assert.Throws<FileNotFoundException>(() => AiIconService.LoadReferenceImage(missingPath));
+        }
+
         // ---- ParseGoogleImageResponse --------------------------------------------------
 
         [Fact]

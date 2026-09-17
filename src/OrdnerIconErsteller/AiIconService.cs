@@ -101,26 +101,66 @@ namespace OrdnerIconErsteller
             }
         }
 
+        // Deckt sich bewusst mit FolderContentScanner.MaxReferenceImageBytes - hier
+        // trotzdem eine eigene, unabhaengige Grenze (Pruefbericht v2.2.0, P1: "das
+        // Einlesen besitzt keine eigene Groessenbegrenzung"), damit diese Methode
+        // auch dann sicher bleibt, wenn sie kuenftig von woanders als nur dem
+        // FolderContentScanner-Pfad aus aufgerufen wird.
+        private const long MaxReferenceImageBytes = 15 * 1024 * 1024; // 15 MB
+
         /// <summary>
         /// Liest eine bereits im Zielordner vorhandene Bilddatei ein, damit sie als
         /// <see cref="ReferenceImage"/> an <see cref="GenerateIconImageAsync"/>
-        /// übergeben werden kann. Der MIME-Typ wird anhand der Dateiendung bestimmt -
-        /// reicht für die hier unterstützten, von <see cref="FolderContentScanner"/>
-        /// erkannten Bildformate aus.
+        /// übergeben werden kann.
+        ///
+        /// Pruefbericht v2.2.0 (P1: "Referenzbild wird nicht als Bild validiert"):
+        /// vorher wurden Endung und Dateigroesse nur vom aufrufenden
+        /// FolderContentScanner geprueft, hier selbst gar nicht - eine beliebige,
+        /// nur passend benannte Datei waere unveraendert an Google geschickt
+        /// worden. Jetzt wird die Groesse hier selbst nochmal begrenzt (siehe
+        /// <see cref="MaxReferenceImageBytes"/>) und die Datei tatsaechlich als
+        /// Bild dekodiert - der MIME-Typ kommt danach vom erkannten Bildformat,
+        /// nicht mehr blind von der Dateiendung.
         /// </summary>
         public static ReferenceImage LoadReferenceImage(string filePath)
         {
-            byte[] bytes = File.ReadAllBytes(filePath);
-            string mimeType = Path.GetExtension(filePath).ToLowerInvariant() switch
+            var fileInfo = new FileInfo(filePath);
+            if (!fileInfo.Exists)
             {
-                ".png" => "image/png",
-                ".jpg" or ".jpeg" => "image/jpeg",
-                ".bmp" => "image/bmp",
-                ".gif" => "image/gif",
-                ".webp" => "image/webp",
-                _ => "application/octet-stream",
-            };
+                throw new FileNotFoundException("Die Referenzbild-Datei wurde nicht gefunden.", filePath);
+            }
+            if (fileInfo.Length <= 0 || fileInfo.Length > MaxReferenceImageBytes)
+            {
+                throw new InvalidOperationException(
+                    $"Die Datei \"{filePath}\" ist leer oder größer als " +
+                    $"{MaxReferenceImageBytes / 1024 / 1024} MB und wird deshalb nicht als Referenzbild verwendet.");
+            }
+
+            byte[] bytes = File.ReadAllBytes(filePath);
+            string mimeType;
+            try
+            {
+                using var stream = new MemoryStream(bytes, writable: false);
+                using var image = Image.FromStream(stream, useEmbeddedColorManagement: false, validateImageData: true);
+                mimeType = MimeTypeForRawFormat(image.RawFormat);
+            }
+            catch (Exception ex) when (ex is ArgumentException or ExternalException or OutOfMemoryException)
+            {
+                throw new InvalidOperationException(
+                    $"Die Datei \"{filePath}\" ist kein gültiges Bild und wird deshalb nicht als " +
+                    "Referenzbild verwendet.", ex);
+            }
+
             return new ReferenceImage(bytes, mimeType);
+        }
+
+        private static string MimeTypeForRawFormat(ImageFormat format)
+        {
+            if (format.Equals(ImageFormat.Png)) return "image/png";
+            if (format.Equals(ImageFormat.Jpeg)) return "image/jpeg";
+            if (format.Equals(ImageFormat.Bmp)) return "image/bmp";
+            if (format.Equals(ImageFormat.Gif)) return "image/gif";
+            return "application/octet-stream";
         }
 
         /// <summary>

@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using System.Text;
 
 namespace OrdnerIconErsteller
@@ -55,9 +54,23 @@ namespace OrdnerIconErsteller
             }
         }
 
-        public static ScanResult Scan(string folderPath)
+        /// <param name="folderPath">Der zu durchsuchende Zielordner.</param>
+        /// <param name="allowReferenceImage">
+        /// Nur wenn true wird ueberhaupt nach einem vorhandenen Bild gesucht und
+        /// dessen Pfad zurueckgegeben. Pruefbericht v2.2.0 (weiterer Fehler: "bei
+        /// OpenAI behauptet der Prompt, ein Referenzbild werde mitgesendet, obwohl
+        /// OpenAI es vollstaendig verwirft"): das im Prompt-Text erwaehnte
+        /// Referenzbild wird bisher unabhaengig vom gewaehlten Anbieter erwaehnt,
+        /// obwohl nur Google es tatsaechlich als Bild-Eingabe erhaelt (siehe
+        /// AiIconService.ReferenceImage). Der Aufrufer (MainForm) uebergibt hier
+        /// deshalb explizit, ob der aktuell gewaehlte Anbieter ueberhaupt ein
+        /// Referenzbild verwenden kann - nur dann taucht es im Prompt auf und wird
+        /// als ReferenceImagePath zurueckgegeben.
+        /// </param>
+        public static ScanResult Scan(string folderPath, bool allowReferenceImage = true)
         {
             var relevantEntries = new List<string>();
+            bool hasMoreThanListed = false;
             string? referenceImagePath = null;
 
             foreach (string path in Directory.EnumerateFileSystemEntries(folderPath))
@@ -69,9 +82,25 @@ namespace OrdnerIconErsteller
                 }
 
                 bool isDirectory = Directory.Exists(path);
-                relevantEntries.Add(isDirectory ? name + "/" : name);
 
-                if (referenceImagePath is null && !isDirectory && IsImageFile(name))
+                // Nur die ersten MaxListedFileNames Namen tatsaechlich behalten
+                // (Pruefbericht v2.2.0, weiterer Fehler: "speichert trotz der
+                // 25-Namen-Grenze zunaechst saemtliche Eintraege") - bei sehr
+                // grossen Ordnern wuerde sonst unnoetig eine komplette, ggf. sehr
+                // lange Liste im Speicher aufgebaut, obwohl spaeter ohnehin nur die
+                // ersten 25 Namen in den Prompt uebernommen werden. Die Suche nach
+                // einem Referenzbild laeuft unabhaengig davon ueber alle Eintraege
+                // weiter, bis eines gefunden ist.
+                if (relevantEntries.Count < MaxListedFileNames)
+                {
+                    relevantEntries.Add(isDirectory ? name + "/" : name);
+                }
+                else
+                {
+                    hasMoreThanListed = true;
+                }
+
+                if (allowReferenceImage && referenceImagePath is null && !isDirectory && IsImageFile(name))
                 {
                     try
                     {
@@ -90,7 +119,7 @@ namespace OrdnerIconErsteller
             }
 
             string folderName = new DirectoryInfo(folderPath).Name;
-            string prompt = BuildImplicitPrompt(folderName, relevantEntries, referenceImagePath is not null);
+            string prompt = BuildImplicitPrompt(folderName, relevantEntries, hasMoreThanListed, referenceImagePath is not null);
 
             return new ScanResult(prompt, referenceImagePath);
         }
@@ -132,7 +161,7 @@ namespace OrdnerIconErsteller
             return false;
         }
 
-        internal static string BuildImplicitPrompt(string folderName, List<string> entries, bool hasReferenceImage)
+        internal static string BuildImplicitPrompt(string folderName, List<string> entries, bool hasMoreThanListed, bool hasReferenceImage)
         {
             var sb = new StringBuilder();
             sb.Append("Erstelle ein einfaches, minimalistisches Icon-Symbol, das gut zu einem Ordner mit dem Namen \"")
@@ -142,12 +171,9 @@ namespace OrdnerIconErsteller
 
             if (entries.Count > 0)
             {
-                IEnumerable<string> namesToList = entries.Count > MaxListedFileNames
-                    ? entries.Take(MaxListedFileNames)
-                    : entries;
                 sb.Append(" Der Ordner enthält u.a. folgende Dateien/Unterordner: ")
-                  .Append(string.Join(", ", namesToList));
-                if (entries.Count > MaxListedFileNames)
+                  .Append(string.Join(", ", entries));
+                if (hasMoreThanListed)
                 {
                     sb.Append(" und weitere");
                 }

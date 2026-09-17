@@ -684,27 +684,32 @@ namespace OrdnerIconErsteller.Tests
         }
 
         [Fact]
-        public void ReplaceGeneratedImageAndSetIcon_ZweiterAufrufMitDemselbenZielpfad_WirftUndUeberschreibtNichtDasVorhandeneBild()
+        public void ReplaceGeneratedImageAndSetIcon_ZweiterAufrufMitDemselbenBevorzugtenZielpfad_WeichtAufNeuenDateinamenAusUndBehaeltBeideBilder()
         {
-            // Seit "Icon ohne Überschreiben" (Merten-Feedback nach v2.1.4) erzeugt
-            // jeder Aufruf einen eigenen, neuen Dateinamen (siehe
-            // MainForm.BuildUniqueAiIconImagePath) - ein zweiter Aufruf mit
-            // GENAU DEMSELBEN Zielpfad ist deshalb ein Aufruferfehler und muss
-            // abgelehnt werden, statt das bereits vorhandene Bild stillschweigend zu
-            // ersetzen.
+            // Pruefbericht v2.2.0, P1: "Zwei gleichzeitig laufende Programminstanzen
+            // können denselben angeblich eindeutigen Dateinamen auswählen. Eine
+            // kostenpflichtige Erzeugung kann dadurch nachträglich verloren gehen."
+            // Der übergebene Pfad ist deshalb nur noch ein WUNSCH-Dateiname (siehe
+            // MainForm.BuildUniqueAiIconImagePath) - kollidiert er mit einem
+            // inzwischen vorhandenen Bild, weicht FolderIconService jetzt automatisch
+            // auf einen neuen Dateinamen aus, statt das zweite, bereits erzeugte
+            // (und ggf. bezahlte) Bild zu verwerfen.
             string targetFolder = Directory.CreateTempSubdirectory("OrdnerIconErsteller_KiZiel_").FullName;
             try
             {
-                string generatedImagePath = Path.Combine(targetFolder, "Icon-Original (von KI erzeugt).png");
+                string preferredPath = Path.Combine(targetFolder, "Icon-Original (von KI erzeugt).png");
                 byte[] erstesBild = CreateTestPngBytes(Color.Tomato);
                 byte[] zweitesBild = CreateTestPngBytes(Color.SteelBlue);
 
-                FolderIconService.ReplaceGeneratedImageAndSetIcon(targetFolder, erstesBild, generatedImagePath);
+                string ersterPfad = FolderIconService.ReplaceGeneratedImageAndSetIcon(targetFolder, erstesBild, preferredPath);
+                string zweiterPfad = FolderIconService.ReplaceGeneratedImageAndSetIcon(targetFolder, zweitesBild, preferredPath);
 
-                Assert.Throws<InvalidOperationException>(
-                    () => FolderIconService.ReplaceGeneratedImageAndSetIcon(targetFolder, zweitesBild, generatedImagePath));
+                Assert.Equal(preferredPath, ersterPfad);
+                Assert.NotEqual(preferredPath, zweiterPfad);
+                Assert.NotEqual(ersterPfad, zweiterPfad);
 
-                Assert.Equal(erstesBild, File.ReadAllBytes(generatedImagePath));
+                Assert.Equal(erstesBild, File.ReadAllBytes(ersterPfad));
+                Assert.Equal(zweitesBild, File.ReadAllBytes(zweiterPfad));
                 Assert.Empty(new DirectoryInfo(targetFolder).GetFiles("*.ai-icon.tmp*"));
                 Assert.Empty(new DirectoryInfo(targetFolder).GetFiles("*.ai-icon.safety*"));
             }
