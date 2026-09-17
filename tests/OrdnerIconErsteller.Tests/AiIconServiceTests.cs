@@ -141,6 +141,29 @@ namespace OrdnerIconErsteller.Tests
             Assert.Equal("IMAGE", modalities[1].GetString());
         }
 
+        [Fact]
+        public void BuildGoogleRequestBody_MitReferenzbild_EnthaeltBildTeilVorDemTextTeil()
+        {
+            // Regressionstest für "Icon ohne Text" (Merten-Feedback nach v2.1.4):
+            // ist ein Referenzbild aus dem Zielordner vorhanden, muss es als
+            // inline_data-Teil VOR dem Text-Teil in "contents[0].parts" stehen, damit
+            // Gemini es eindeutig als Grundlage für die Bearbeitung erkennt.
+            byte[] referenceBytes = { 1, 2, 3, 4 };
+            var referenceImage = new AiIconService.ReferenceImage(referenceBytes, "image/png");
+
+            object body = AiIconService.BuildGoogleRequestBody("ein blaues Quadrat", referenceImage);
+            using var doc = JsonDocument.Parse(JsonSerializer.Serialize(body));
+
+            JsonElement parts = doc.RootElement.GetProperty("contents")[0].GetProperty("parts");
+            Assert.Equal(2, parts.GetArrayLength());
+
+            JsonElement inlineData = parts[0].GetProperty("inline_data");
+            Assert.Equal("image/png", inlineData.GetProperty("mime_type").GetString());
+            Assert.Equal(Convert.ToBase64String(referenceBytes), inlineData.GetProperty("data").GetString());
+
+            Assert.Equal("ein blaues Quadrat", parts[1].GetProperty("text").GetString());
+        }
+
         // ---- ParseGoogleImageResponse --------------------------------------------------
 
         [Fact]

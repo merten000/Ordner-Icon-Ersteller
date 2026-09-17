@@ -142,8 +142,8 @@ namespace OrdnerIconErsteller
 
             var aiPromptPanel = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, AutoSize = true };
             _txtAiPrompt.Dock = DockStyle.Fill;
-            _txtAiPrompt.PlaceholderText = "z. B. \"ein minimalistisches blaues Wolken-Symbol\"";
-            aiPromptPanel.Controls.Add(new Label { Text = "Beschreibung (Prompt):", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, 4, 0, 0) }, 0, 0);
+            _txtAiPrompt.PlaceholderText = "z. B. \"ein minimalistisches blaues Wolken-Symbol\" - leer lassen, damit der Ordnerinhalt selbst als Grundlage dient";
+            aiPromptPanel.Controls.Add(new Label { Text = "Beschreibung (Prompt) - optional:", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, 4, 0, 0) }, 0, 0);
             aiPromptPanel.Controls.Add(_txtAiPrompt, 0, 1);
 
             var aiActionPanel = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
@@ -373,12 +373,6 @@ namespace OrdnerIconErsteller
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
-            if (string.IsNullOrWhiteSpace(_txtAiPrompt.Text))
-            {
-                MessageBox.Show(this, "Bitte zuerst eine Beschreibung für das gewünschte Icon eingeben.", "Beschreibung fehlt",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
 
             // Ordner, Anbieter und Prompt EINMALIG hier festhalten und danach nur
             // noch diese lokalen Werte verwenden - NICHT mehr _txtFolder.Text usw.
@@ -389,7 +383,54 @@ namespace OrdnerIconErsteller
             // alle konkurrierenden Ordner-/Icon-Aktionen im Fenster gesperrt.
             string targetFolder = _txtFolder.Text;
             AiImageProvider provider = _cmbAiProvider.SelectedIndex == 1 ? AiImageProvider.Google : AiImageProvider.OpenAi;
-            string prompt = _txtAiPrompt.Text.Trim();
+            string enteredPrompt = _txtAiPrompt.Text.Trim();
+
+            // "Icon ohne Text" (Merten-Feedback nach v2.1.4): ist keine Beschreibung
+            // eingegeben, wird nicht mehr abgebrochen, sondern der Zielordner selbst
+            // durchsucht (Dateinamen als Kontext, ein evtl. vorhandenes Bild als
+            // Referenz für Google) - siehe FolderContentScanner.
+            string prompt;
+            AiIconService.ReferenceImage? referenceImage = null;
+            if (string.IsNullOrWhiteSpace(enteredPrompt))
+            {
+                FolderContentScanner.ScanResult scan;
+                try
+                {
+                    scan = FolderContentScanner.Scan(targetFolder);
+                }
+                catch (Exception ex)
+                {
+                    Log($"FEHLER beim Durchsuchen des Ordners für \"Icon ohne Text\": {ex.Message}");
+                    MessageBox.Show(this, $"Der Ordner konnte nicht durchsucht werden:\n{ex.Message}", "Fehler",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
+
+                prompt = scan.ImplicitPrompt;
+                if (scan.ReferenceImagePath is not null)
+                {
+                    try
+                    {
+                        referenceImage = AiIconService.LoadReferenceImage(scan.ReferenceImagePath);
+                    }
+                    catch (Exception ex)
+                    {
+                        // Ein nicht lesbares Referenzbild darf die Erzeugung nicht komplett
+                        // verhindern - dann eben ohne Bild-Referenz weitermachen, nur mit
+                        // der bereits gebauten Text-Beschreibung.
+                        Log($"Hinweis: Referenzbild \"{scan.ReferenceImagePath}\" konnte nicht gelesen werden " +
+                            $"({ex.Message}) - Erzeugung läuft ohne Bild-Referenz weiter.");
+                    }
+                }
+
+                Log($"Kein Text eingegeben - Ordnerinhalt wird stattdessen als Grundlage verwendet " +
+                    $"(Zielordner: {targetFolder}" +
+                    (referenceImage is not null ? ", mit Referenzbild aus dem Ordner)." : ")."));
+            }
+            else
+            {
+                prompt = enteredPrompt;
+            }
 
             // Zusaetzliche Sicherheitspruefung unmittelbar vor der ersten
             // tatsaechlichen Netzwerkanfrage - falls z. B. ein Credential ausserhalb
@@ -412,10 +453,14 @@ namespace OrdnerIconErsteller
                 return;
             }
 
-            // Das erzeugte Bild wird dauerhaft im Zielordner selbst gespeichert
-            // (Dateiname "Icon-Original (von KI erzeugt).png"), damit es als Quelle
-            // erhalten bleibt - genau wie bei einem manuell ausgewählten Bild.
-            string generatedImagePath = Path.Combine(targetFolder, "Icon-Original (von KI erzeugt).png");
+            // Das erzeugte Bild wird dauerhaft im Zielordner selbst gespeichert, damit
+            // es als Quelle erhalten bleibt - genau wie bei einem manuell ausgewählten
+            // Bild. Seit "Icon ohne Überschreiben" (Merten-Feedback nach v2.1.4) bekommt
+            // JEDE Erzeugung einen eigenen, eindeutigen Dateinamen (Zeitstempel) statt
+            // eine evtl. schon vorhandene Datei zu ersetzen - siehe
+            // BuildUniqueAiIconImagePath. Ältere Versionen bleiben dadurch zum
+            // Vergleichen im Ordner liegen, bis der Benutzer sie selbst löscht.
+            string generatedImagePath = BuildUniqueAiIconImagePath(targetFolder);
 
             SetAiOperationControlsEnabled(false);
             _aiOperationInProgress = true;
@@ -427,7 +472,7 @@ namespace OrdnerIconErsteller
                 // AiIconService liefert an dieser Stelle bereits vollstaendig als
                 // gueltiges Bild dekodierte und in ein kanonisches PNG neu
                 // encodierte Bytes zurueck (siehe dortige DecodeAndReencodeAsPng).
-                byte[] imageBytes = await AiIconService.GenerateIconImageAsync(provider, prompt);
+                byte[] imageBytes = await AiIconService.GenerateIconImageAsync(provider, prompt, referenceImage);
 
                 // Schreiben der PNG-Datei UND das anschliessende Setzen des Icons
                 // laufen jetzt als EINE Transaktion unter derselben
@@ -462,6 +507,28 @@ namespace OrdnerIconErsteller
                 SetAiOperationControlsEnabled(true);
                 _aiOperationInProgress = false;
             }
+        }
+
+        /// <summary>
+        /// Baut einen garantiert noch nicht existierenden Dateinamen für ein neu zu
+        /// erzeugendes KI-Icon im Zielordner (Merten-Feedback nach v2.1.4: "Icon ohne
+        /// Überschreiben" - jede Erzeugung bekommt ihre eigene Datei, ältere Versionen
+        /// bleiben zum Vergleichen erhalten). Zeitstempel bis auf die Sekunde genau
+        /// sorgt für eine sprechende, nach Erzeugungszeit sortierbare Reihenfolge; ein
+        /// zusätzliches Suffix deckt den (praktisch nie vorkommenden) Fall ab, dass
+        /// zweimal innerhalb derselben Sekunde erzeugt wird.
+        /// </summary>
+        private static string BuildUniqueAiIconImagePath(string targetFolder)
+        {
+            string baseName = "Icon-Original (von KI erzeugt) " + DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss");
+            string candidate = Path.Combine(targetFolder, baseName + ".png");
+            int suffix = 2;
+            while (File.Exists(candidate))
+            {
+                candidate = Path.Combine(targetFolder, $"{baseName} ({suffix}).png");
+                suffix++;
+            }
+            return candidate;
         }
 
         /// <summary>

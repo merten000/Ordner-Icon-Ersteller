@@ -282,22 +282,26 @@ namespace OrdnerIconErsteller
         }
 
         /// <summary>
-        /// Schreibt die von der KI erzeugten Bilddaten als
-        /// "Icon-Original (von KI erzeugt).png" in den Zielordner und setzt danach
-        /// das Ordner-Icon daraus - beides als EINE Transaktion unter derselben
-        /// prozessübergreifenden Ordnersperre wie <see cref="SetFolderIcon"/> und
-        /// <see cref="RemoveFolderIcon"/> (siehe <see cref="RunExclusive"/>).
+        /// Schreibt die von der KI erzeugten Bilddaten als NEUE, bisher nicht
+        /// existierende Datei (<paramref name="generatedImagePath"/>, vom Aufrufer
+        /// mit einem eindeutigen, z.B. zeitstempelbasierten Namen gebildet) in den
+        /// Zielordner und setzt danach das Ordner-Icon daraus - beides als EINE
+        /// Transaktion unter derselben prozessübergreifenden Ordnersperre wie
+        /// <see cref="SetFolderIcon"/> und <see cref="RemoveFolderIcon"/> (siehe
+        /// <see cref="RunExclusive"/>).
         ///
-        /// Das behebt zwei von ChatGPT bei der KI-Icon-Funktion gefundene
-        /// Freigabeblocker: (1) eine zweite, gleichzeitig gestartete Instanz konnte
-        /// dieselbe PNG-Datei/denselben Icon-Vorgang parallel bearbeiten, weil die
-        /// PNG-Sicherung/-Ersetzung bisher außerhalb jeder Sperre in MainForm lag;
-        /// (2) ein fehlgeschlagenes Zurückholen der Sicherung konnte dazu führen,
-        /// dass der äußere Aufräum-Code die einzige verbliebene Kopie des alten
-        /// Originals löscht. Beides wird jetzt durch dieselben bereits mehrfach
-        /// geprüften Bausteine (<see cref="SwapIntoPlace"/>/<see cref="UndoSwap"/>
-        /// mit ihrem "safetyPathMustBePreserved"-Mechanismus) abgedeckt wie beim
-        /// Setzen von Icon.ico/desktop.ini.
+        /// Seit der Ergänzung "Icon ohne Überschreiben" (Merten-Feedback nach v2.1.4)
+        /// überschreibt eine neue KI-Icon-Erzeugung nie mehr eine bereits vorhandene
+        /// Bilddatei im selben Ordner: jeder Aufruf bekommt einen eigenen, neuen
+        /// Dateinamen, damit mehrere erzeugte Varianten nebeneinander liegen bleiben
+        /// und der Benutzer sie selbst vergleichen/löschen kann (siehe
+        /// MainForm.BuildUniqueAiIconImagePath). Ein Aufruf mit einem bereits
+        /// existierenden Pfad wird deshalb sicherheitshalber abgelehnt, statt die
+        /// Datei stillschweigend zu ersetzen. Schlägt das anschließende Setzen des
+        /// Ordner-Icons fehl (z.B. weil desktop.ini gerade gesperrt ist), bleibt die
+        /// bereits geschriebene Bilddatei trotzdem erhalten - anders als früher wird
+        /// sie NICHT mehr zurückgerollt/gelöscht, damit ein erzeugtes Bild nie allein
+        /// wegen eines fehlgeschlagenen Icon-Schritts verloren geht.
         /// </summary>
         public static void ReplaceGeneratedImageAndSetIcon(string folderPath, byte[] imageBytes, string generatedImagePath)
         {
@@ -331,75 +335,36 @@ namespace OrdnerIconErsteller
 
         private static void ReplaceGeneratedImageAndSetIconLocked(string folderPath, byte[] imageBytes, string generatedImagePath)
         {
-            string tempImage = UniqueTempPath(folderPath, ".ai-icon.tmp");
-            string imageSafety = UniqueTempPath(folderPath, ".ai-icon.safety");
-            bool imageSwapped = false;
-            bool imageSafetyMustBePreserved = false;
+            if (File.Exists(generatedImagePath))
+            {
+                // Sollte durch den eindeutigen (zeitstempelbasierten) Dateinamen des
+                // Aufrufers praktisch nie vorkommen - trotzdem zur Sicherheit: nie
+                // stillschweigend eine vorhandene Datei überschreiben.
+                throw new InvalidOperationException(
+                    $"Es existiert bereits eine Datei unter \"{generatedImagePath}\" - es wird nichts " +
+                    "überschrieben. Bitte das Icon erneut erzeugen.");
+            }
 
+            string tempImage = UniqueTempPath(folderPath, ".ai-icon.tmp");
             try
             {
-                try
-                {
-                    File.WriteAllBytes(tempImage, imageBytes);
-
-                    // Vorhandenes altes "Icon-Original" wird von SwapIntoPlace zuerst
-                    // nach imageSafety verschoben (nicht gelöscht) - schlägt der
-                    // zweite Schritt fehl, holt sich SwapIntoPlace das selbst
-                    // sofort zurück und signalisiert über
-                    // imageSafetyMustBePreserved verbindlich, falls selbst das
-                    // misslingt (siehe Kommentar dort).
-                    SwapIntoPlace(generatedImagePath, tempImage, imageSafety, out imageSafetyMustBePreserved);
-                    imageSwapped = true;
-
-                    // Bereits innerhalb derselben Ordnersperre - kein erneutes
-                    // RunExclusive (würde sich selbst blockieren).
-                    SetFolderIconLocked(folderPath, generatedImagePath);
-                }
-                catch (Exception primary)
-                {
-                    if (imageSwapped)
-                    {
-                        try
-                        {
-                            UndoSwap(generatedImagePath, imageSafety);
-                        }
-                        catch (Exception undoEx)
-                        {
-                            // Entweder ist die interne Selbstheilung aus SwapIntoPlace
-                            // gescheitert (die vorherige Datei liegt dann nur noch unter
-                            // imageSafety), oder es gab vorher gar keine Datei und das
-                            // Entfernen der gerade erst eingesetzten neuen Datei ist
-                            // fehlgeschlagen (z.B. weil sie gerade von einem
-                            // Virenscanner geöffnet ist). In beiden Fällen darf
-                            // imageSafety nicht als "nicht mehr benötigt" gelöscht
-                            // werden, und der Fehler muss sichtbar bleiben statt eines
-                            // fälschlich als vollständig geltenden Rollbacks.
-                            imageSafetyMustBePreserved = true;
-                            bool hadPreviousImage = File.Exists(imageSafety);
-                            string detail = hadPreviousImage
-                                ? $"das vorherige \"Icon-Original\" konnte aus \"{imageSafety}\" nicht " +
-                                  "automatisch zurückgeholt werden. Die Datei bleibt dort bewusst erhalten"
-                                : $"die gerade erst geschriebene neue Bilddatei \"{generatedImagePath}\" " +
-                                  "konnte beim Zurückrollen nicht entfernt werden. Sie bleibt trotz dieser " +
-                                  "Fehlermeldung dort liegen";
-                            throw new AggregateException(
-                                $"Das Setzen des KI-Icons ist fehlgeschlagen, und das automatische " +
-                                $"Zurückrollen konnte nicht vollständig abgeschlossen werden: {detail} - " +
-                                "bitte manuell prüfen.",
-                                new[] { primary, undoEx });
-                        }
-                    }
-                    throw;
-                }
+                File.WriteAllBytes(tempImage, imageBytes);
+                // Umbenennen (kein Copy-Overwrite) - auf demselben Volume praktisch
+                // unteilbar, und da generatedImagePath nachweislich noch nicht
+                // existiert, kann hier nichts überschrieben werden.
+                File.Move(tempImage, generatedImagePath);
             }
             finally
             {
                 TryDelete(tempImage);
-                if (!imageSafetyMustBePreserved)
-                {
-                    TryDelete(imageSafety);
-                }
             }
+
+            // Das Bild ist jetzt dauerhaft im Zielordner gespeichert. Schlägt das
+            // eigentliche Setzen des Ordner-Icons fehl, bleibt es trotzdem erhalten -
+            // SetFolderIconLocked hat für Icon.ico/desktop.ini bereits sein eigenes,
+            // vollständiges Rollback; die gerade geschriebene Bilddatei ist davon
+            // unabhängig und wird hier bewusst NICHT mehr zurückgerollt.
+            SetFolderIconLocked(folderPath, generatedImagePath);
         }
 
         /// <summary>

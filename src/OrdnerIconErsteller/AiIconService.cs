@@ -81,6 +81,49 @@ namespace OrdnerIconErsteller
         private const long MaxPixelCount = 50_000_000; // 50 Megapixel
 
         /// <summary>
+        /// Ein bereits im Zielordner vorhandenes Bild, das als visuelle Referenz an
+        /// den KI-Anbieter mitgeschickt wird (siehe "Icon ohne Text" - Merten-Feedback
+        /// nach v2.1.4, ermittelt von <see cref="FolderContentScanner"/>). Wird aktuell
+        /// nur von Google (Gemini) tatsächlich als Bild-Eingabe unterstützt - die hier
+        /// verwendete OpenAI-Bild-API (images/generations) nimmt keine Bild-Eingabe
+        /// entgegen, dort wirkt sich ein Referenzbild nur über die Text-Beschreibung
+        /// aus, die es in <see cref="FolderContentScanner"/> bereits erwähnt.
+        /// </summary>
+        internal readonly struct ReferenceImage
+        {
+            public byte[] Bytes { get; }
+            public string MimeType { get; }
+
+            public ReferenceImage(byte[] bytes, string mimeType)
+            {
+                Bytes = bytes;
+                MimeType = mimeType;
+            }
+        }
+
+        /// <summary>
+        /// Liest eine bereits im Zielordner vorhandene Bilddatei ein, damit sie als
+        /// <see cref="ReferenceImage"/> an <see cref="GenerateIconImageAsync"/>
+        /// übergeben werden kann. Der MIME-Typ wird anhand der Dateiendung bestimmt -
+        /// reicht für die hier unterstützten, von <see cref="FolderContentScanner"/>
+        /// erkannten Bildformate aus.
+        /// </summary>
+        public static ReferenceImage LoadReferenceImage(string filePath)
+        {
+            byte[] bytes = File.ReadAllBytes(filePath);
+            string mimeType = Path.GetExtension(filePath).ToLowerInvariant() switch
+            {
+                ".png" => "image/png",
+                ".jpg" or ".jpeg" => "image/jpeg",
+                ".bmp" => "image/bmp",
+                ".gif" => "image/gif",
+                ".webp" => "image/webp",
+                _ => "application/octet-stream",
+            };
+            return new ReferenceImage(bytes, mimeType);
+        }
+
+        /// <summary>
         /// Erzeugt ein Bild anhand des Prompts beim gewaehlten Anbieter und liefert
         /// die rohen Bilddaten als kanonisches PNG zurueck. Der Aufrufer speichert
         /// diese Bytes in die Zieldatei und uebergibt sie an die bestehende
@@ -89,18 +132,22 @@ namespace OrdnerIconErsteller
         /// PNG encodiert (siehe <see cref="DecodeAndReencodeAsPng"/>) - der Aufrufer
         /// muss sie also nicht selbst nochmal validieren, bevor er sie dauerhaft
         /// speichert.
+        ///
+        /// <paramref name="referenceImage"/> ist optional und wird nur bei
+        /// <see cref="AiImageProvider.Google"/> tatsächlich als Bild-Eingabe verwendet
+        /// (siehe <see cref="ReferenceImage"/>).
         /// </summary>
-        public static async Task<byte[]> GenerateIconImageAsync(AiImageProvider provider, string prompt)
+        public static async Task<byte[]> GenerateIconImageAsync(AiImageProvider provider, string prompt, ReferenceImage? referenceImage = null)
         {
             if (string.IsNullOrWhiteSpace(prompt))
             {
-                throw new ArgumentException("Bitte einen Text fuer das gewuenschte Icon eingeben.", nameof(prompt));
+                throw new ArgumentException("Es wurde kein Text fuer das gewuenschte Icon ermittelt.", nameof(prompt));
             }
 
             byte[] imageBytes = provider switch
             {
                 AiImageProvider.OpenAi => await GenerateWithOpenAiAsync(prompt).ConfigureAwait(false),
-                AiImageProvider.Google => await GenerateWithGoogleAsync(prompt).ConfigureAwait(false),
+                AiImageProvider.Google => await GenerateWithGoogleAsync(prompt, referenceImage).ConfigureAwait(false),
                 _ => throw new ArgumentOutOfRangeException(nameof(provider), provider, "Unbekannter KI-Anbieter."),
             };
 
@@ -255,7 +302,7 @@ namespace OrdnerIconErsteller
             }
         }
 
-        private static async Task<byte[]> GenerateWithGoogleAsync(string prompt)
+        private static async Task<byte[]> GenerateWithGoogleAsync(string prompt, ReferenceImage? referenceImage)
         {
             string? apiKey = ApiKeyStore.ReadGoogleKey();
             if (string.IsNullOrEmpty(apiKey))
@@ -275,7 +322,7 @@ namespace OrdnerIconErsteller
             // antworten. Liefert der erste Versuch trotzdem nur Text, wird EINMAL
             // automatisch mit einer noch deutlicheren Formulierung wiederholt, bevor
             // ein Fehler (inkl. der Text-Antwort des Modells) angezeigt wird.
-            (byte[]? imageBytes, string? textOnlyResponse) = await GenerateWithGoogleOnceAsync(apiKey, BuildGoogleImagePrompt(prompt))
+            (byte[]? imageBytes, string? textOnlyResponse) = await GenerateWithGoogleOnceAsync(apiKey, BuildGoogleImagePrompt(prompt), referenceImage)
                 .ConfigureAwait(false);
             if (imageBytes is not null)
             {
@@ -285,7 +332,7 @@ namespace OrdnerIconErsteller
             string retryPrompt = BuildGoogleImagePrompt(prompt) +
                 " This is very important: your entire response must be a single generated image. " +
                 "Do not write any words, do not ask questions, do not explain - respond with the image only.";
-            (imageBytes, string? retryTextOnlyResponse) = await GenerateWithGoogleOnceAsync(apiKey, retryPrompt)
+            (imageBytes, string? retryTextOnlyResponse) = await GenerateWithGoogleOnceAsync(apiKey, retryPrompt, referenceImage)
                 .ConfigureAwait(false);
             if (imageBytes is not null)
             {
@@ -315,29 +362,49 @@ namespace OrdnerIconErsteller
         /// Prompt-Feld pruefen kann, ohne eine echte Anfrage zu senden
         /// (Pruefbericht Punkt 7).
         /// </summary>
-        internal static object BuildGoogleRequestBody(string effectivePrompt) => new
+        internal static object BuildGoogleRequestBody(string effectivePrompt, ReferenceImage? referenceImage = null)
         {
-            system_instruction = new
+            var parts = new List<object>();
+            if (referenceImage is ReferenceImage refImage)
             {
-                parts = new object[]
+                // Das Referenzbild MUSS vor dem Text-Teil stehen, damit Gemini es
+                // eindeutig als Grundlage für die Bearbeitung/Erzeugung erkennt statt
+                // als bloßen Anhang (siehe Googles eigene Beispiele für "image editing").
+                parts.Add(new
                 {
-                    new
+                    inline_data = new
                     {
-                        text = "You are an image generator for desktop folder icons. Always respond with a " +
-                               "generated image and no descriptive text, even for short or ambiguous prompts. " +
-                               "Never ask clarifying questions.",
+                        mime_type = refImage.MimeType,
+                        data = Convert.ToBase64String(refImage.Bytes),
+                    },
+                });
+            }
+            parts.Add(new { text = effectivePrompt });
+
+            return new
+            {
+                system_instruction = new
+                {
+                    parts = new object[]
+                    {
+                        new
+                        {
+                            text = "You are an image generator for desktop folder icons. Always respond with a " +
+                                   "generated image and no descriptive text, even for short or ambiguous prompts. " +
+                                   "Never ask clarifying questions.",
+                        },
                     },
                 },
-            },
-            contents = new object[]
-            {
-                new { parts = new object[] { new { text = effectivePrompt } } },
-            },
-            generationConfig = new
-            {
-                responseModalities = new[] { "TEXT", "IMAGE" },
-            },
-        };
+                contents = new object[]
+                {
+                    new { parts = parts.ToArray() },
+                },
+                generationConfig = new
+                {
+                    responseModalities = new[] { "TEXT", "IMAGE" },
+                },
+            };
+        }
 
         /// <summary>
         /// Ein einzelner Aufruf der Google-Bild-API. Liefert die Bild-Bytes, oder -
@@ -347,12 +414,12 @@ namespace OrdnerIconErsteller
         /// (Ein "out"-Parameter wäre hier nicht zulässig - async-Methoden dürfen
         /// keine ref/in/out-Parameter haben - deshalb ein Tupel als Rückgabewert.)
         /// </summary>
-        private static async Task<(byte[]? ImageBytes, string? TextOnlyResponse)> GenerateWithGoogleOnceAsync(string apiKey, string effectivePrompt)
+        private static async Task<(byte[]? ImageBytes, string? TextOnlyResponse)> GenerateWithGoogleOnceAsync(string apiKey, string effectivePrompt, ReferenceImage? referenceImage)
         {
             const string url = "https://generativelanguage.googleapis.com/v1/models/gemini-3.1-flash-image:generateContent";
             using var request = new HttpRequestMessage(HttpMethod.Post, url)
             {
-                Content = new StringContent(JsonSerializer.Serialize(BuildGoogleRequestBody(effectivePrompt)), Encoding.UTF8, "application/json"),
+                Content = new StringContent(JsonSerializer.Serialize(BuildGoogleRequestBody(effectivePrompt, referenceImage)), Encoding.UTF8, "application/json"),
             };
             request.Headers.Add("x-goog-api-key", apiKey);
 

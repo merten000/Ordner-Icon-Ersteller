@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
@@ -683,8 +684,14 @@ namespace OrdnerIconErsteller.Tests
         }
 
         [Fact]
-        public void ReplaceGeneratedImageAndSetIcon_ZweitesMal_ErsetztVorherigesBildAtomar()
+        public void ReplaceGeneratedImageAndSetIcon_ZweiterAufrufMitDemselbenZielpfad_WirftUndUeberschreibtNichtDasVorhandeneBild()
         {
+            // Seit "Icon ohne Überschreiben" (Merten-Feedback nach v2.1.4) erzeugt
+            // jeder Aufruf einen eigenen, neuen Dateinamen (siehe
+            // MainForm.BuildUniqueAiIconImagePath) - ein zweiter Aufruf mit
+            // GENAU DEMSELBEN Zielpfad ist deshalb ein Aufruferfehler und muss
+            // abgelehnt werden, statt das bereits vorhandene Bild stillschweigend zu
+            // ersetzen.
             string targetFolder = Directory.CreateTempSubdirectory("OrdnerIconErsteller_KiZiel_").FullName;
             try
             {
@@ -693,9 +700,11 @@ namespace OrdnerIconErsteller.Tests
                 byte[] zweitesBild = CreateTestPngBytes(Color.SteelBlue);
 
                 FolderIconService.ReplaceGeneratedImageAndSetIcon(targetFolder, erstesBild, generatedImagePath);
-                FolderIconService.ReplaceGeneratedImageAndSetIcon(targetFolder, zweitesBild, generatedImagePath);
 
-                Assert.Equal(zweitesBild, File.ReadAllBytes(generatedImagePath));
+                Assert.Throws<InvalidOperationException>(
+                    () => FolderIconService.ReplaceGeneratedImageAndSetIcon(targetFolder, zweitesBild, generatedImagePath));
+
+                Assert.Equal(erstesBild, File.ReadAllBytes(generatedImagePath));
                 Assert.Empty(new DirectoryInfo(targetFolder).GetFiles("*.ai-icon.tmp*"));
                 Assert.Empty(new DirectoryInfo(targetFolder).GetFiles("*.ai-icon.safety*"));
             }
@@ -760,25 +769,36 @@ namespace OrdnerIconErsteller.Tests
         }
 
         [Fact]
-        public void ReplaceGeneratedImageAndSetIcon_MehrereAufrufeNacheinanderAufDenselbenOrdner_BleibenKonsistent()
+        public void ReplaceGeneratedImageAndSetIcon_MehrereAufrufeMitUnterschiedlichenDateinamen_BehaltenAlleBilderUndIconZeigtAufsLetzte()
         {
-            // Prüft, dass wiederholte Aufrufe (z.B. mehrere KI-Icon-Erzeugungen
-            // hintereinander im selben Ordner) am Ende einen konsistenten Zustand ohne
-            // liegen gebliebene Transaktions-Temp-/Sicherungsdateien hinterlassen. Das
-            // eigentliche gleichzeitige Zugreifen zweier Instanzen auf denselben Ordner
-            // prüft separat der echte Konkurrenztest unten
-            // (ReplaceGeneratedImageAndSetIcon_WaehrendAndereInstanzDenOrdnerSperrt_...) -
-            // dieser Test hier deckt nur den sequenziellen Wiederholungsfall ab.
+            // Kernverhalten von "Icon ohne Überschreiben" (Merten-Feedback nach
+            // v2.1.4): mehrere KI-Icon-Erzeugungen hintereinander im selben Ordner
+            // (mit je einem eigenen, eindeutigen Dateinamen wie es
+            // MainForm.BuildUniqueAiIconImagePath liefert) dürfen sich nicht
+            // gegenseitig ersetzen - alle erzeugten Bilder bleiben zum Vergleichen
+            // erhalten, und nur das zuletzt erzeugte wird als aktuelles Ordner-Icon
+            // verwendet. Das eigentliche gleichzeitige Zugreifen zweier Instanzen auf
+            // denselben Ordner prüft separat der echte Konkurrenztest unten
+            // (ReplaceGeneratedImageAndSetIcon_WaehrendAndereInstanzDenOrdnerSperrt_...).
             string targetFolder = Directory.CreateTempSubdirectory("OrdnerIconErsteller_KiZiel_").FullName;
             try
             {
-                string generatedImagePath = Path.Combine(targetFolder, "Icon-Original (von KI erzeugt).png");
+                var erzeugtePfade = new List<string>();
 
                 for (int i = 0; i < 5; i++)
                 {
+                    string generatedImagePath = Path.Combine(targetFolder, $"Icon-Original (von KI erzeugt) {i}.png");
                     byte[] bild = CreateTestPngBytes(i % 2 == 0 ? Color.Tomato : Color.SteelBlue);
                     FolderIconService.ReplaceGeneratedImageAndSetIcon(targetFolder, bild, generatedImagePath);
+                    erzeugtePfade.Add(generatedImagePath);
                     Assert.Equal(bild, File.ReadAllBytes(generatedImagePath));
+                }
+
+                // Alle fünf Bilddateien müssen noch vorhanden sein - keine wurde durch
+                // eine spätere Erzeugung ersetzt oder gelöscht.
+                foreach (string pfad in erzeugtePfade)
+                {
+                    Assert.True(File.Exists(pfad), $"Erwartete, weiterhin vorhandene Bilddatei fehlt: {pfad}");
                 }
 
                 // Die Sperrdatei selbst bleibt bestehen (wird von RunExclusive
@@ -795,20 +815,16 @@ namespace OrdnerIconErsteller.Tests
         }
 
         [Fact]
-        public void ReplaceGeneratedImageAndSetIcon_RollbackLoeschenSchlaegtOhneVorherigesBildFehl_WirftUndLaesstDateiLiegen()
+        public void ReplaceGeneratedImageAndSetIcon_IconSetzenSchlaegtFehl_BilddateiBleibtTrotzdemErhalten()
         {
-            // Regressionstest aus der 3. ChatGPT-Gegenpruefung (Freigabeblocker 1):
-            // schlug beim Zurückrollen (kein vorheriges KI-Bild vorhanden) das Löschen
-            // der gerade erst geschriebenen neuen Bilddatei fehl, wurde dieser Fehler
-            // bisher über die alles abfangende TryDelete-Methode stillschweigend
-            // verschluckt - die Datei blieb trotz angezeigter Fehlermeldung liegen. Ein
-            // echter, wiederholbarer Test über eine externe Datei-Sperre wäre nur
-            // zeitabhängig (Race Condition) und damit unzuverlässig herstellbar - genau
-            // wie die bereits im README dokumentierte Testabdeckungs-Lücke aus v2.0.5.
-            // Stattdessen simuliert der interne Testhaken
-            // FolderIconService.TestHook_SimulateDeleteFailure den Löschfehler
-            // deterministisch, z.B. so, wie ihn ein kurz zugreifender Virenscanner in
-            // der Praxis auslösen könnte.
+            // Regressionstest für die mit "Icon ohne Überschreiben" geänderte
+            // Rollback-Logik: schlägt das eigentliche Setzen des Ordner-Icons fehl
+            // (hier simuliert, indem "desktop.ini" bereits als Verzeichnis existiert),
+            // darf die schon geschriebene KI-Bilddatei NICHT mehr zurückgerollt/
+            // gelöscht werden - anders als beim alten, überschreibenden Verhalten gibt
+            // es hier keine "vorherige Version", die stattdessen wiederhergestellt
+            // werden müsste, und ein erzeugtes Bild soll nie allein wegen eines
+            // fehlgeschlagenen Icon-Schritts verloren gehen.
             string targetFolder = Directory.CreateTempSubdirectory("OrdnerIconErsteller_KiZiel_").FullName;
             try
             {
@@ -818,28 +834,15 @@ namespace OrdnerIconErsteller.Tests
                 string generatedImagePath = Path.Combine(targetFolder, "Icon-Original (von KI erzeugt).png");
                 byte[] bild = CreateTestPngBytes(Color.Tomato);
 
-                FolderIconService.TestHook_SimulateDeleteFailure = path =>
-                    string.Equals(path, generatedImagePath, StringComparison.OrdinalIgnoreCase);
-                try
-                {
-                    var ex = Assert.Throws<AggregateException>(
-                        () => FolderIconService.ReplaceGeneratedImageAndSetIcon(targetFolder, bild, generatedImagePath));
-                    Assert.Contains("nicht entfernt werden", ex.Message);
-                }
-                finally
-                {
-                    FolderIconService.TestHook_SimulateDeleteFailure = null;
-                }
+                Assert.ThrowsAny<Exception>(
+                    () => FolderIconService.ReplaceGeneratedImageAndSetIcon(targetFolder, bild, generatedImagePath));
 
-                // Der fehlgeschlagene Rollback muss sichtbar bleiben: die neue,
-                // fehlerhafte Datei bleibt bewusst liegen, statt fälschlich als entfernt
-                // zu gelten.
                 Assert.True(File.Exists(generatedImagePath),
-                    "Nach einem simulierten Löschfehler beim Rollback muss die Datei absichtlich liegen bleiben.");
+                    "Die KI-Bilddatei muss auch bei einem fehlgeschlagenen Icon-Setzen erhalten bleiben.");
+                Assert.Equal(bild, File.ReadAllBytes(generatedImagePath));
             }
             finally
             {
-                FolderIconService.TestHook_SimulateDeleteFailure = null;
                 TryDeleteDirectory(targetFolder);
             }
         }

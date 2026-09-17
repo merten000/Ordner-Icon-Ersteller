@@ -45,7 +45,7 @@
 ;    laufen wuerde (z.B. reines 32-Bit-Windows).
 
 #define MyAppName "Ordner-Icon-Ersteller"
-#define MyAppVersion "2.1.4"
+#define MyAppVersion "2.2.0"
 #define MyAppPublisher "Merten"
 #define MyAppExeName "OrdnerIconErsteller.exe"
 

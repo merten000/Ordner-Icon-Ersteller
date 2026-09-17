@@ -1,4 +1,59 @@
-# Ordner-Icon-Ersteller (Version 2.1.4 – komplette Neuentwicklung)
+# Ordner-Icon-Ersteller (Version 2.2.0 – komplette Neuentwicklung)
+
+## KI-Icon: "ohne Text" und "ohne Überschreiben" (v2.1.4 → v2.2.0)
+
+Zwei von Merten nach dem erfolgreichen praktischen End-to-End-Test von v2.1.4
+gewünschte Erweiterungen der KI-Icon-Funktion, noch vor dem für v2.1.4 geplant
+gewesenen Installer-/Release-Test:
+
+1. **Icon-Erzeugung ohne Text möglich** (`FolderContentScanner.cs` neu,
+   `AiIconService.cs`, `MainForm.cs`): Das Feld "Beschreibung (Prompt)" ist
+   jetzt optional. Bleibt es leer, durchsucht das Programm stattdessen selbst
+   den Zielordner (`FolderContentScanner.Scan`) und baut daraus eine
+   Beschreibung: Ordnername plus die enthaltenen Datei-/Unterordnernamen
+   (eigene Zustands-/Sicherungsdateien und frühere KI-Icons werden dabei
+   ignoriert). Enthält der Ordner bereits ein Bild, wird dessen Pfad
+   zusätzlich als Referenzbild vorgeschlagen. Bei Google (Gemini) wird dieses
+   Referenzbild als echte Bild-Eingabe in derselben Anfrage mitgeschickt
+   (`AiIconService.BuildGoogleRequestBody`), sodass sich das neue Icon
+   inhaltlich/stilistisch daran orientieren kann. Bei OpenAI wirkt sich das
+   Referenzbild aktuell nur über die Text-Beschreibung aus - die dort
+   verwendete Bild-API (`images/generations`) nimmt keine Bild-Eingabe
+   entgegen; eine echte Bild-Eingabe auch für OpenAI (über den separaten
+   `images/edits`-Endpunkt) wäre bei Bedarf eine spätere Erweiterung.
+2. **Kein Überschreiben mehr bei mehreren Erzeugungen** (`FolderIconService.cs`,
+   `MainForm.cs`): Bisher hat jede neu erzeugte KI-Icon-Version die vorherige
+   Bilddatei im Zielordner ersetzt. Jetzt bekommt jede Erzeugung einen eigenen,
+   eindeutigen Dateinamen mit Zeitstempel
+   (`MainForm.BuildUniqueAiIconImagePath`, z.B.
+   "Icon-Original (von KI erzeugt) 2026-09-17_14-32-05.png"). Ältere Versionen
+   bleiben dadurch im Ordner erhalten, damit mehrere Versuche verglichen und
+   bei Bedarf selbst gelöscht werden können. Das zuletzt erzeugte Bild wird
+   automatisch als aktuelles Ordner-Icon gesetzt.
+   `FolderIconService.ReplaceGeneratedImageAndSetIcon` wurde dafür vereinfacht:
+   da der übergebene Zielpfad jetzt garantiert noch nicht existiert, entfällt
+   die bisherige Swap-/Rollback-Logik für die Bilddatei selbst (kein
+   `SwapIntoPlace`/`UndoSwap` mehr dafür) - ein bereits vorhandener Zielpfad
+   wird stattdessen sicherheitshalber mit einer `InvalidOperationException`
+   abgelehnt. Schlägt das anschließende Setzen des Ordner-Icons fehl (z.B. weil
+   `desktop.ini` gerade gesperrt ist), bleibt die bereits geschriebene
+   Bilddatei jetzt bewusst erhalten, statt wie bisher zurückgerollt zu werden -
+   ein erzeugtes Bild soll nie allein wegen eines fehlgeschlagenen Icon-Schritts
+   verloren gehen.
+
+Neue/angepasste Tests: `FolderContentScannerTests.cs` (neu, 4 Tests: leerer
+Ordner, gewöhnliche Dateien, Ordner mit Bild als Referenz, Ignorieren eigener
+Zustands-/früherer KI-Icon-Dateien), `AiIconServiceTests.cs` (neuer Test für
+`BuildGoogleRequestBody` mit Referenzbild), `FolderIconServiceTests.cs`
+(bestehende Überschreib-Tests an das neue Nicht-Überschreiben-Verhalten
+angepasst: zweiter Aufruf mit demselben Zielpfad wirft jetzt statt zu
+überschreiben, mehrere Aufrufe mit unterschiedlichen Dateinamen behalten alle
+Bilder, neuer Test bestätigt, dass die Bilddatei bei fehlgeschlagenem
+Icon-Setzen erhalten bleibt).
+
+Von Merten noch zu bestätigen: Build/`dotnet test` auf seinem Rechner, danach
+praktischer Test von "Icon ohne Text" (mit und ohne vorhandenes Bild im
+Zielordner) sowie mehrfacher Erzeugung im selben Ordner.
 
 ## Regressionstests nach der 4. ChatGPT-Gegenprüfung der KI-Icon-Funktion (v2.1.3 → v2.1.4)
 
