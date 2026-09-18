@@ -12,10 +12,20 @@
          Kann später ergänzt werden: <ApplicationIcon>app.ico</ApplicationIcon> -->
 
     <!-- Versionsinfo -->
-    <Version>2.7.2</Version>
+    <Version>2.7.3</Version>
     <Product>Ordner-Icon-Ersteller</Product>
     <Company>Merten</Company>
     <Copyright>© Merten</Copyright>
+
+    <!-- Pruefbericht v2.7.2, weiterer Punkt 2: OHNE diese Zeile koennte ein spaeterer
+         Build auf einem aktualisierten Rechner eine andere .NET-Runtime-Patchversion
+         buendeln, waehrend die fest eingecheckten Lizenzdateien (legal\dotnet-runtime)
+         weiterhin "8.0.31" beschreiben. Fest auf die tatsaechlich verwendete Version
+         gepinnt - bei einem bewussten Runtime-Sicherheitsupdate muss diese Zeile UND
+         legal\dotnet-runtime\LICENSE.TXT/THIRD-PARTY-NOTICES.TXT zusammen auf die neue
+         Version aktualisiert werden (siehe Kommentar dort unten), damit beides wieder
+         zusammenpasst. -->
+    <RuntimeFrameworkVersion>8.0.31</RuntimeFrameworkVersion>
 
     <!-- Bewusst KEINE Selbst-Erhöhung auf Administratorrechte:
          alles läuft im Kontext des angemeldeten Benutzers (HKCU),

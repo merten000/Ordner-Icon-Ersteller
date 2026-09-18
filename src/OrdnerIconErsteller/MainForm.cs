@@ -565,7 +565,9 @@ namespace OrdnerIconErsteller
                         }
                         else
                         {
-                            Log($"Referenzbild \"{scan.ReferenceImagePath}\" auf Wunsch nicht mitgesendet.");
+                            // Pruefbericht v2.7.2, verbliebener Freigabeblocker: auch hier keinen
+                            // vollstaendigen Dateipfad mehr loggen (siehe DATENSCHUTZ.md).
+                            Log("Referenzbild auf Wunsch nicht mitgesendet.");
                         }
                     }
 
@@ -642,7 +644,11 @@ namespace OrdnerIconErsteller
 
                 _txtImage.Text = generatedImagePath;
 
-                Log($"KI-Icon gesetzt für: {targetFolder} (Bilddatei: {generatedImagePath})");
+                // Pruefbericht v2.7.2, verbliebener Freigabeblocker: kein vollstaendiger
+                // Ziel-/Bildpfad mehr im Log (siehe DATENSCHUTZ.md, "Prompt- und
+                // Ordnerinformationen erscheinen dort nicht"). Der Pfad steht ohnehin schon
+                // sichtbar im Feld "Bild für das Icon" (_txtImage), das direkt darueber liegt.
+                Log("KI-Icon wurde erfolgreich erzeugt und gesetzt.");
                 MessageBox.Show(this, "Das von der KI erzeugte Icon wurde gesetzt und als Bilddatei im Ordner gespeichert. " +
                     "Falls der Explorer es nicht sofort anzeigt, Ansicht kurz aktualisieren (F5).",
                     "Fertig", MessageBoxButtons.OK, MessageBoxIcon.Information);

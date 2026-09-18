@@ -1,11 +1,37 @@
-# Ordner-Icon-Ersteller (Version 2.7.2 – komplette Neuentwicklung)
+# Ordner-Icon-Ersteller (Version 2.7.3 – komplette Neuentwicklung)
+
+## ChatGPT-Gegenprüfung v2.7.2: letzter Freigabeblocker + zwei kleinere Punkte behoben (v2.7.2 → v2.7.3)
+
+ChatGPT hat Commit `73cbeb0` (v2.7.2) gegengeprüft: vier der fünf
+vorherigen Freigabeblocker waren vollständig behoben, ein Blocker blieb
+teilweise bestehen, dazu zwei kleinere Verbesserungen:
+
+1. **Zwei weitere Log-Meldungen zeigten noch vollständige Pfade**, obwohl
+   die Datenschutzerklärung das Gegenteil behauptet - übersehen worden
+   waren die Meldung beim Ablehnen eines Referenzbildes
+   ("Referenzbild ... auf Wunsch nicht mitgesendet") und die Meldung
+   nach erfolgreicher KI-Icon-Erzeugung ("KI-Icon gesetzt für: ...").
+   Beide zeigen jetzt nur noch den Status, ohne Datei-/Ordnerpfad
+   (`MainForm.cs`).
+2. **.NET-Runtime-Version war im Projekt nicht festgelegt** - ein
+   späterer Build auf einem aktualisierten Rechner hätte eine andere
+   Runtime-Patchversion bündeln können, während die fest eingecheckten
+   Lizenzdateien weiterhin 8.0.31 beschreiben. Jetzt über
+   `RuntimeFrameworkVersion` fest auf 8.0.31 gepinnt
+   (`OrdnerIconErsteller.csproj`) - bei einem bewussten
+   Runtime-Sicherheitsupdate müssen diese Zeile und die Dateien in
+   `legal/dotnet-runtime/` zusammen aktualisiert werden.
+3. **README verwies auf einen nicht mitgelieferten Prüfbericht** - der
+   Verweis auf die nur lokal bei Merten liegende Datei wurde durch eine
+   direkte Zusammenfassung ersetzt (dieser Abschnitt hier).
 
 ## ChatGPT-Prüfbericht v2.7.1 behoben: fünf Freigabeblocker + zwei weitere Punkte (v2.7.1 → v2.7.2)
 
 ChatGPT hat Commit `6609cf1` (v2.7.1) geprüft und fünf Freigabeblocker
-sowie zwei weitere Fehler/Verbesserungen gefunden (voller Bericht:
-`Pruefbericht-Ordner-Icon-Ersteller-v2.7.1-6609cf1.md`). Alle fünf
-Blocker sowie Punkt 6 und 7 wurden behoben:
+sowie zwei weitere Fehler/Verbesserungen gefunden (der volle Prüfbericht
+liegt nur lokal bei Merten, nicht im Repository - deshalb hier bewusst
+keine Datei referenziert, sondern die Punkte direkt zusammengefasst).
+Alle fünf Blocker sowie Punkt 6 und 7 wurden behoben:
 
 1. **.NET-Lizenz/Drittanbieterhinweise fehlten im Installer.** Als
    selbstenthaltene .NET-8-Anwendung bündelt das Programm Teile der
