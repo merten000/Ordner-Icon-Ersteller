@@ -14,9 +14,21 @@ namespace OrdnerIconErsteller
         private readonly Button _btnBrowseImage = new() { Text = "Bild wählen..." };
         private readonly Button _btnSetIcon = new() { Text = "Icon setzen" };
         private readonly Button _btnRemoveIcon = new() { Text = "Icon entfernen" };
-        private readonly Button _btnRegisterMenu = new() { Text = "Ins Rechtsklick-Menü integrieren" };
-        private readonly Button _btnUnregisterMenu = new() { Text = "Aus Rechtsklick-Menü entfernen" };
+        private readonly CheckBox _chkContextMenu = new() { Text = "Ins Rechtsklick-Menü integrieren", AutoSize = true };
         private readonly Label _lblMenuStatus = new() { AutoSize = true };
+        // Merten-Feedback (v2.5.0-Test): gemeint war kein gemeinsames "Menü"-Dropdown,
+        // sondern zwei eigene Knöpfe ("Einstellungen" links, "Rechtliches" rechts),
+        // bei denen sich beim Klick jeweils darunter ein aufklappendes Menü öffnet -
+        // also das ganz normale Windows-Standardverhalten eines Dropdown-Menüs unter
+        // einem Knopf (ContextMenuStrip.Show), NICHT ein eigenes Popup-Fenster und
+        // NICHT eine gemeinsame ComboBox. Die beiden ContextMenuStrip-Objekte werden
+        // einmalig in BuildLayout() befüllt und danach nur noch wiederverwendet -
+        // dadurch entfällt auch das Dispose-Problem der vorherigen Fenster-Lösung
+        // (v2.4.0/v2.4.1), weil hier nichts pro Klick neu erzeugt/verworfen wird.
+        private readonly Button _btnEinstellungen = new() { Text = "Einstellungen" };
+        private readonly Button _btnRechtliches = new() { Text = "Rechtliches" };
+        private readonly ContextMenuStrip _settingsMenu = new();
+        private readonly ContextMenuStrip _rechtlichesMenu = new();
         private readonly TextBox _txtAiPrompt = new();
         private readonly ComboBox _cmbAiProvider = new() { DropDownStyle = ComboBoxStyle.DropDownList };
         private readonly TextBox _txtAiKey = new() { UseSystemPasswordChar = true };
@@ -43,10 +55,10 @@ namespace OrdnerIconErsteller
         public MainForm(string? startFolder)
         {
             Text = "Ordner-Icon-Ersteller";
-            Width = 640;
-            Height = 480;
+            Width = 660;
+            Height = 500;
             StartPosition = FormStartPosition.CenterScreen;
-            MinimumSize = new Size(560, 420);
+            MinimumSize = new Size(600, 440);
 
             BuildLayout();
             WireEvents();
@@ -62,19 +74,24 @@ namespace OrdnerIconErsteller
 
         private void BuildLayout()
         {
-            var root = new TableLayoutPanel
+            // Layout: eine obere Werkzeugleiste (Dock=Top, volle Fensterbreite)
+            // mit den zwei Knöpfen "Einstellungen"/"Rechtliches" rechtsbündig, und
+            // darunter der restliche Inhalt (Dock=Fill). Jeder Knopf öffnet beim
+            // Klick ein aufklappendes Dropdown-Menü (ContextMenuStrip) direkt
+            // darunter - siehe die Kommentare weiter unten für die verworfenen
+            // Zwischenschritte (Band, Popup-Fenster, ComboBox).
+            var leftContent = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 1,
                 Padding = new Padding(12),
-                RowCount = 6
+                RowCount = 5
             };
-            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            leftContent.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            leftContent.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            leftContent.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            leftContent.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            leftContent.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
             // Zeile 1: Ordnerauswahl
             var folderPanel = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, AutoSize = true };
@@ -105,18 +122,7 @@ namespace OrdnerIconErsteller
             actionPanel.Controls.Add(_btnSetIcon);
             actionPanel.Controls.Add(_btnRemoveIcon);
 
-            // Zeile 4: Kontextmenü-Integration
-            var menuGroup = new GroupBox { Text = "Explorer-Rechtsklick-Menü", Dock = DockStyle.Fill, AutoSize = true, Padding = new Padding(8) };
-            var menuPanel = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
-            _btnRegisterMenu.Width = 220;
-            _btnUnregisterMenu.Width = 200;
-            _lblMenuStatus.Margin = new Padding(10, 8, 0, 0);
-            menuPanel.Controls.Add(_btnRegisterMenu);
-            menuPanel.Controls.Add(_btnUnregisterMenu);
-            menuPanel.Controls.Add(_lblMenuStatus);
-            menuGroup.Controls.Add(menuPanel);
-
-            // Zeile 5: Icon per KI erzeugen (optional)
+            // Zeile 4: Icon per KI erzeugen (optional)
             var aiGroup = new GroupBox { Text = "Icon per KI erzeugen (optional)", Dock = DockStyle.Fill, AutoSize = true, Padding = new Padding(8) };
             var aiLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, AutoSize = true };
 
@@ -156,17 +162,70 @@ namespace OrdnerIconErsteller
             aiLayout.Controls.Add(aiActionPanel, 0, 3);
             aiGroup.Controls.Add(aiLayout);
 
-            // Zeile 6: Log
+            // Obere Werkzeugleiste, über die volle Fensterbreite (Merten-Feedback:
+            // "musst du es oben mit den Tools und Rechtlichen nicht alles in eine
+            // extra Leiste einfügen, dass es bündig bleibt"). Zwei eigene Knöpfe
+            // ("Einstellungen" links, "Rechtliches" rechts) - jeweils mit einem
+            // klassischen aufklappenden Dropdown-Menü darunter (ContextMenuStrip),
+            // genau das Standard-Verhalten, das Merten nach dem v2.5.0-Test
+            // beschrieben hat ("dass die Menübox sich eben nach unten hin dann
+            // eben aufblättert, wie es eigentlich sonst so immer Standard ist").
+            // Frühere, verworfene Ansätze: ein seitliches "Band" mit ein-/
+            // ausklappbaren Panels (v2.3.3-v2.3.6, blieb beim Anklicken
+            // unsichtbar), je ein eigenes Popup-Fenster per Form.ShowDialog
+            // (v2.4.0/v2.4.1, funktionierte, aber nicht die gewünschte Optik),
+            // und eine gemeinsame ComboBox mit Platzhaltertext (v2.5.0, falsch
+            // verstanden - siehe Rückmeldung).
+            var topBar = new Panel { Dock = DockStyle.Top, Height = 40, Padding = new Padding(0, 4, 12, 4) };
+            var topBarButtons = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Right,
+                AutoSize = true,
+                FlowDirection = FlowDirection.LeftToRight,
+                WrapContents = false
+            };
+            const int toggleButtonWidth = 130;
+            _btnEinstellungen.Width = toggleButtonWidth;
+            _btnRechtliches.Width = toggleButtonWidth;
+            topBarButtons.Controls.Add(_btnEinstellungen);
+            topBarButtons.Controls.Add(_btnRechtliches);
+            topBar.Controls.Add(topBarButtons);
+
+            // Inhalt des "Einstellungen"-Dropdowns: Erklärungstext (reines Label,
+            // braucht kein eigenes Feld) + der Rechtsklick-Menü-Schalter mit
+            // Status. ContextMenuStrip/ToolStripControlHost wird nur EINMAL hier
+            // aufgebaut und danach für die gesamte Laufzeit wiederverwendet -
+            // anders als bei der vorherigen Fenster-Lösung wird hier also nichts
+            // pro Klick disposed, das Dispose-Problem von v2.4.0 kann hier gar
+            // nicht erst auftreten.
+            _settingsMenu.Items.Add(new ToolStripLabel("Explorer-Rechtsklick-Menü:") { Margin = new Padding(8, 4, 8, 0) });
+            _chkContextMenu.Margin = new Padding(4, 2, 4, 2);
+            _lblMenuStatus.Margin = new Padding(4, 0, 4, 4);
+            _settingsMenu.Items.Add(new ToolStripControlHost(_chkContextMenu));
+            _settingsMenu.Items.Add(new ToolStripControlHost(_lblMenuStatus));
+
+            // Inhalt des "Rechtliches"-Dropdowns: die vier Dokumente als normale
+            // Menüpunkte (kein eigenes Button-Feld mehr nötig, da sie nur hier
+            // gebraucht werden).
+            _rechtlichesMenu.Items.Add("Impressum", null, (_, _) => ShowLegalDocument(LegalDocumentService.Document.Impressum));
+            _rechtlichesMenu.Items.Add("Datenschutz", null, (_, _) => ShowLegalDocument(LegalDocumentService.Document.Datenschutz));
+            _rechtlichesMenu.Items.Add("Lizenz", null, (_, _) => ShowLegalDocument(LegalDocumentService.Document.Lizenz));
+            _rechtlichesMenu.Items.Add("Haftungsausschluss", null, (_, _) => ShowLegalDocument(LegalDocumentService.Document.Haftungsausschluss));
+
+            // Log
             _txtLog.Dock = DockStyle.Fill;
 
-            root.Controls.Add(folderPanel, 0, 0);
-            root.Controls.Add(imagePanel, 0, 1);
-            root.Controls.Add(actionPanel, 0, 2);
-            root.Controls.Add(menuGroup, 0, 3);
-            root.Controls.Add(aiGroup, 0, 4);
-            root.Controls.Add(_txtLog, 0, 5);
+            leftContent.Controls.Add(folderPanel, 0, 0);
+            leftContent.Controls.Add(imagePanel, 0, 1);
+            leftContent.Controls.Add(actionPanel, 0, 2);
+            leftContent.Controls.Add(aiGroup, 0, 3);
+            leftContent.Controls.Add(_txtLog, 0, 4);
 
-            Controls.Add(root);
+            // Reihenfolge: die oben angedockte Leiste zuerst, danach das
+            // Dock=Fill-Element, das dann zuverlässig den kompletten Rest der
+            // Fensterhöhe bekommt.
+            Controls.Add(topBar);
+            Controls.Add(leftContent);
         }
 
         private void WireEvents()
@@ -195,13 +254,44 @@ namespace OrdnerIconErsteller
 
             _btnSetIcon.Click += (_, _) => SetIcon();
             _btnRemoveIcon.Click += (_, _) => RemoveIcon();
-            _btnRegisterMenu.Click += (_, _) => RegisterMenu();
-            _btnUnregisterMenu.Click += (_, _) => UnregisterMenu();
+            _chkContextMenu.CheckedChanged += (_, _) => OnContextMenuCheckedChanged();
             _btnAiGenerate.Click += async (_, _) => await GenerateAiIconAsync();
             _cmbAiProvider.SelectedIndexChanged += (_, _) => RefreshAiKeyField();
             _chkShowAiKey.CheckedChanged += (_, _) => _txtAiKey.UseSystemPasswordChar = !_chkShowAiKey.Checked;
             _btnAiSaveKey.Click += (_, _) => SaveAiKey();
             _btnAiDeleteKey.Click += (_, _) => DeleteAiKey();
+
+            // Klassisches aufklappendes Dropdown-Menü direkt unter dem jeweiligen
+            // Knopf (Merten-Feedback nach v2.5.0-Test) - der Menü-Inhalt selbst
+            // wurde bereits einmalig in BuildLayout() befüllt.
+            _btnEinstellungen.Click += (_, _) => _settingsMenu.Show(_btnEinstellungen, new Point(0, _btnEinstellungen.Height));
+            _btnRechtliches.Click += (_, _) => _rechtlichesMenu.Show(_btnRechtliches, new Point(0, _btnRechtliches.Height));
+        }
+
+        /// <summary>
+        /// Liest das angeforderte Dokument über <see cref="LegalDocumentService"/> ein
+        /// und zeigt es in einem einfachen Anzeigefenster an. Fehlt die Datei (z.B.
+        /// unvollständige Installation), erscheint statt eines unklaren Absturzes eine
+        /// verständliche Fehlermeldung (Merten-Feedback: "Fehlt eine Datei, soll eine
+        /// verständliche Meldung erscheinen").
+        /// </summary>
+        private void ShowLegalDocument(LegalDocumentService.Document document)
+        {
+            string title = LegalDocumentService.TitleFor(document);
+            string content;
+            try
+            {
+                content = LegalDocumentService.ReadText(document);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, ex.Message, "Dokument nicht gefunden",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            using var viewer = new LegalDocumentViewerForm(title, content);
+            viewer.ShowDialog(this);
         }
 
         private void SetIcon()
@@ -256,36 +346,48 @@ namespace OrdnerIconErsteller
             }
         }
 
-        private void RegisterMenu()
-        {
-            try
-            {
-                ContextMenuService.Register();
-                Log("Rechtsklick-Menü-Eintrag wurde eingetragen (nur für diesen Benutzer, keine Admin-Rechte nötig).");
-                RefreshMenuStatus();
-            }
-            catch (Exception ex)
-            {
-                Log($"FEHLER beim Eintragen des Menüs: {ex.Message}");
-                MessageBox.Show(this, $"Fehler beim Eintragen ins Kontextmenü:\n{ex.Message}", "Fehler",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-        }
+        // Verhindert, dass RefreshMenuStatus() (das den Haken programmatisch auf den
+        // tatsächlichen Registry-Zustand setzt) selbst wieder OnContextMenuCheckedChanged
+        // auslöst und damit ungewollt ein zweites Mal Register()/Unregister() aufruft.
+        private bool _suppressContextMenuCheckedEvent;
 
-        private void UnregisterMenu()
+        private void OnContextMenuCheckedChanged()
         {
-            try
+            if (_suppressContextMenuCheckedEvent)
             {
-                ContextMenuService.Unregister();
-                Log("Rechtsklick-Menü-Eintrag wurde entfernt.");
-                RefreshMenuStatus();
+                return;
             }
-            catch (Exception ex)
+
+            if (_chkContextMenu.Checked)
             {
-                Log($"FEHLER beim Entfernen des Menüs: {ex.Message}");
-                MessageBox.Show(this, $"Fehler beim Entfernen aus dem Kontextmenü:\n{ex.Message}", "Fehler",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                try
+                {
+                    ContextMenuService.Register();
+                    Log("Rechtsklick-Menü-Eintrag wurde eingetragen (nur für diesen Benutzer, keine Admin-Rechte nötig).");
+                }
+                catch (Exception ex)
+                {
+                    Log($"FEHLER beim Eintragen des Menüs: {ex.Message}");
+                    MessageBox.Show(this, $"Fehler beim Eintragen ins Kontextmenü:\n{ex.Message}", "Fehler",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
             }
+            else
+            {
+                try
+                {
+                    ContextMenuService.Unregister();
+                    Log("Rechtsklick-Menü-Eintrag wurde entfernt.");
+                }
+                catch (Exception ex)
+                {
+                    Log($"FEHLER beim Entfernen des Menüs: {ex.Message}");
+                    MessageBox.Show(this, $"Fehler beim Entfernen aus dem Kontextmenü:\n{ex.Message}", "Fehler",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            }
+
+            RefreshMenuStatus();
         }
 
         private bool IsGoogleSelected => _cmbAiProvider.SelectedIndex == 1;
@@ -367,6 +469,23 @@ namespace OrdnerIconErsteller
 
         private async Task GenerateAiIconAsync()
         {
+            // Pruefbericht v2.2.1, Freigabeblocker 1: vorher wurden die Bedienelemente
+            // erst NACH dem (jetzt per Task.Run im Hintergrund laufenden) Ordner-Scan,
+            // dem Referenzbild-Laden, der Zustimmung und der Namensberechnung gesperrt.
+            // Waehrend ein langsamer Ordner/Netzlaufwerk durchsucht wurde, blieb der
+            // Knopf aktiv - ein zweiter Klick konnte einen parallelen zweiten Ablauf
+            // starten, der sich mit dem ersten gegenseitig ueber
+            // SetAiOperationControlsEnabled/_aiOperationInProgress entsperrt haette.
+            // Deshalb jetzt: fruehzeitiger Ausstieg, falls bereits eine Operation laeuft
+            // (Sicherheitsnetz - die deaktivierten Bedienelemente sollten das ohnehin
+            // verhindern), und Sperre/Deaktivierung GANZ AM ANFANG setzen, noch vor dem
+            // ersten await, mit Scan/Zustimmung/Netzwerkanfrage/Dateitransaktion
+            // zusammen in einem einzigen try/finally.
+            if (_aiOperationInProgress)
+            {
+                return;
+            }
+
             if (string.IsNullOrWhiteSpace(_txtFolder.Text) || !Directory.Exists(_txtFolder.Text))
             {
                 MessageBox.Show(this, "Bitte zuerst einen gültigen Ordner auswählen.", "Ordner fehlt",
@@ -379,108 +498,115 @@ namespace OrdnerIconErsteller
             // Vorher wurde der Zielordner zweimal gelesen, sodass ein waehrend der
             // 20-120 Sekunden dauernden Anfrage geaenderter Ordner dazu fuehren
             // konnte, dass die PNG-Datei im urspruenglichen, das Icon aber im neu
-            // gewaehlten Ordner landet. Zusaetzlich werden waehrend des Auftrags
-            // alle konkurrierenden Ordner-/Icon-Aktionen im Fenster gesperrt.
+            // gewaehlten Ordner landet.
             string targetFolder = _txtFolder.Text;
             AiImageProvider provider = _cmbAiProvider.SelectedIndex == 1 ? AiImageProvider.Google : AiImageProvider.OpenAi;
             string enteredPrompt = _txtAiPrompt.Text.Trim();
-
-            // "Icon ohne Text" (Merten-Feedback nach v2.1.4): ist keine Beschreibung
-            // eingegeben, wird nicht mehr abgebrochen, sondern der Zielordner selbst
-            // durchsucht (Dateinamen als Kontext, ein evtl. vorhandenes Bild als
-            // Referenz für Google) - siehe FolderContentScanner.
-            string prompt;
-            AiIconService.ReferenceImage? referenceImage = null;
-            if (string.IsNullOrWhiteSpace(enteredPrompt))
-            {
-                FolderContentScanner.ScanResult scan;
-                try
-                {
-                    // Referenzbild nur suchen/erwaehnen, wenn der gewaehlte Anbieter es
-                    // ueberhaupt entgegennimmt - siehe FolderContentScanner.Scan (Pruefbericht
-                    // v2.2.0: "bei OpenAI behauptet der Prompt, ein Referenzbild werde
-                    // mitgesendet, obwohl OpenAI es vollstaendig verwirft").
-                    //
-                    // Laeuft in einem Thread-Pool-Thread (Pruefbericht v2.2.0, weiterer
-                    // Fehler: "Der Ordner-Scan läuft auf dem UI-Thread") - bei einem sehr
-                    // grossen Ordner oder einem langsamen Netzlaufwerk wuerde ein
-                    // synchroner Aufruf hier sonst das Fenster einfrieren lassen.
-                    bool allowReferenceImage = provider == AiImageProvider.Google;
-                    scan = await Task.Run(() => FolderContentScanner.Scan(targetFolder, allowReferenceImage));
-                }
-                catch (Exception ex)
-                {
-                    Log($"FEHLER beim Durchsuchen des Ordners für \"Icon ohne Text\": {ex.Message}");
-                    MessageBox.Show(this, $"Der Ordner konnte nicht durchsucht werden:\n{ex.Message}", "Fehler",
-                        MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    return;
-                }
-
-                prompt = scan.ImplicitPrompt;
-                if (scan.ReferenceImagePath is not null)
-                {
-                    try
-                    {
-                        referenceImage = AiIconService.LoadReferenceImage(scan.ReferenceImagePath);
-                    }
-                    catch (Exception ex)
-                    {
-                        // Ein nicht lesbares Referenzbild darf die Erzeugung nicht komplett
-                        // verhindern - dann eben ohne Bild-Referenz weitermachen, nur mit
-                        // der bereits gebauten Text-Beschreibung.
-                        Log($"Hinweis: Referenzbild \"{scan.ReferenceImagePath}\" konnte nicht gelesen werden " +
-                            $"({ex.Message}) - Erzeugung läuft ohne Bild-Referenz weiter.");
-                    }
-                }
-
-                Log($"Kein Text eingegeben - Ordnerinhalt wird stattdessen als Grundlage verwendet " +
-                    $"(Zielordner: {targetFolder}" +
-                    (referenceImage is not null ? ", mit Referenzbild aus dem Ordner)." : ")."));
-            }
-            else
-            {
-                prompt = enteredPrompt;
-            }
-
-            // Zusaetzliche Sicherheitspruefung unmittelbar vor der ersten
-            // tatsaechlichen Netzwerkanfrage - falls z. B. ein Credential ausserhalb
-            // der Oberflaeche angelegt wurde, ohne dass der Hinweis je bestaetigt
-            // wurde. Innerhalb eines eigenen try/catch: ein Fehler beim Speichern
-            // der Zustimmung selbst (z.B. ein fehlgeschlagenes CreateSubKey) wurde
-            // vorher nicht kontrolliert abgefangen (Pruefbericht Punkt 3).
-            try
-            {
-                if (!AiConsentService.EnsureGiven(this))
-                {
-                    return;
-                }
-            }
-            catch (Exception ex)
-            {
-                Log($"FEHLER beim Speichern der Zustimmung: {ex.Message}");
-                MessageBox.Show(this, $"Fehler beim Speichern der Zustimmung:\n{ex.Message}", "Fehler",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
-            }
-
-            // Das erzeugte Bild wird dauerhaft im Zielordner selbst gespeichert, damit
-            // es als Quelle erhalten bleibt - genau wie bei einem manuell ausgewählten
-            // Bild. Seit "Icon ohne Überschreiben" (Merten-Feedback nach v2.1.4) bekommt
-            // JEDE Erzeugung einen eigenen, eindeutigen Dateinamen (Zeitstempel) statt
-            // eine evtl. schon vorhandene Datei zu ersetzen - siehe
-            // BuildUniqueAiIconImagePath. Ältere Versionen bleiben dadurch zum
-            // Vergleichen im Ordner liegen, bis der Benutzer sie selbst löscht.
-            // Nur ein WUNSCH-Dateiname - FolderIconService entscheidet die tatsaechliche
-            // Eindeutigkeit endgueltig innerhalb seiner ordnerweiten Sperre (siehe dortige
-            // Erlaeuterung, Pruefbericht v2.2.0 P1) und liefert unten den tatsaechlich
-            // verwendeten Pfad zurueck.
-            string preferredImagePath = BuildUniqueAiIconImagePath(targetFolder);
 
             SetAiOperationControlsEnabled(false);
             _aiOperationInProgress = true;
             Cursor = Cursors.WaitCursor;
             try
             {
+                // "Icon ohne Text" (Merten-Feedback nach v2.1.4): ist keine Beschreibung
+                // eingegeben, wird nicht mehr abgebrochen, sondern der Zielordner selbst
+                // durchsucht (Dateinamen als Kontext, ein evtl. vorhandenes, bereits
+                // vollstaendig validiertes Bild als Referenz für Google) - siehe
+                // FolderContentScanner.
+                string prompt;
+                AiIconService.ReferenceImage? referenceImage = null;
+                if (string.IsNullOrWhiteSpace(enteredPrompt))
+                {
+                    FolderContentScanner.ScanResult scan;
+                    try
+                    {
+                        // Referenzbild nur suchen, wenn der gewaehlte Anbieter es ueberhaupt
+                        // entgegennimmt - siehe FolderContentScanner.Scan (Pruefbericht v2.2.0:
+                        // "bei OpenAI behauptet der Prompt, ein Referenzbild werde mitgesendet,
+                        // obwohl OpenAI es vollstaendig verwirft").
+                        //
+                        // Laeuft in einem Thread-Pool-Thread (Pruefbericht v2.2.0, weiterer
+                        // Fehler: "Der Ordner-Scan läuft auf dem UI-Thread") - bei einem sehr
+                        // grossen Ordner oder einem langsamen Netzlaufwerk wuerde ein
+                        // synchroner Aufruf hier sonst das Fenster einfrieren lassen. Die
+                        // Bedienelemente sind zu diesem Zeitpunkt (siehe oben) bereits gesperrt.
+                        bool allowReferenceImage = provider == AiImageProvider.Google;
+                        scan = await Task.Run(() => FolderContentScanner.Scan(targetFolder, allowReferenceImage));
+                    }
+                    catch (Exception ex)
+                    {
+                        Log($"FEHLER beim Durchsuchen des Ordners für \"Icon ohne Text\": {ex.Message}");
+                        MessageBox.Show(this, $"Der Ordner konnte nicht durchsucht werden:\n{ex.Message}", "Fehler",
+                            MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        return;
+                    }
+
+                    prompt = scan.ImplicitPrompt;
+
+                    // Pruefbericht v2.2.1, weiterer Fehler 4: der Scanner hat das Bild zwar
+                    // bereits vollstaendig geladen/validiert, aber noch NICHT tatsaechlich
+                    // zur Uebertragung freigegeben - dafuer erst hier ausdruecklich den
+                    // konkreten Dateinamen anzeigen und einzeln bestaetigen/ablehnen lassen.
+                    // Nur bei Zustimmung wird das Bild tatsaechlich verwendet UND der
+                    // Prompt-Text um den Referenz-Hinweis ergaenzt - sonst bleibt der Prompt
+                    // unveraendert (Pruefbericht v2.2.1, weiterer Fehler 3: der Prompt darf
+                    // nie ein Bild behaupten, das am Ende gar nicht mitgesendet wird).
+                    if (scan.ReferenceImage is AiIconService.ReferenceImage validatedImage && scan.ReferenceImagePath is not null)
+                    {
+                        if (AiConsentService.ConfirmReferenceImage(this, scan.ReferenceImagePath))
+                        {
+                            referenceImage = validatedImage;
+                            prompt = FolderContentScanner.WithReferenceImageMention(prompt);
+                        }
+                        else
+                        {
+                            Log($"Referenzbild \"{scan.ReferenceImagePath}\" auf Wunsch nicht mitgesendet.");
+                        }
+                    }
+
+                    Log($"Kein Text eingegeben - Ordnerinhalt wird stattdessen als Grundlage verwendet " +
+                        $"(Zielordner: {targetFolder}" +
+                        (referenceImage is not null ? ", mit Referenzbild aus dem Ordner)." : ")."));
+                }
+                else
+                {
+                    prompt = enteredPrompt;
+                }
+
+                // Zusaetzliche Sicherheitspruefung unmittelbar vor der ersten
+                // tatsaechlichen Netzwerkanfrage - falls z. B. ein Credential ausserhalb
+                // der Oberflaeche angelegt wurde, ohne dass der Hinweis je bestaetigt
+                // wurde. Innerhalb eines eigenen try/catch: ein Fehler beim Speichern
+                // der Zustimmung selbst (z.B. ein fehlgeschlagenes CreateSubKey) wurde
+                // vorher nicht kontrolliert abgefangen (Pruefbericht Punkt 3).
+                try
+                {
+                    if (!AiConsentService.EnsureGiven(this))
+                    {
+                        return;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log($"FEHLER beim Speichern der Zustimmung: {ex.Message}");
+                    MessageBox.Show(this, $"Fehler beim Speichern der Zustimmung:\n{ex.Message}", "Fehler",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
+
+                // Das erzeugte Bild wird dauerhaft im Zielordner selbst gespeichert, damit
+                // es als Quelle erhalten bleibt - genau wie bei einem manuell ausgewählten
+                // Bild. Seit "Icon ohne Überschreiben" (Merten-Feedback nach v2.1.4) bekommt
+                // JEDE Erzeugung einen eigenen, eindeutigen Dateinamen (Zeitstempel) statt
+                // eine evtl. schon vorhandene Datei zu ersetzen - siehe
+                // BuildUniqueAiIconImagePath. Ältere Versionen bleiben dadurch zum
+                // Vergleichen im Ordner liegen, bis der Benutzer sie selbst löscht.
+                // Nur ein WUNSCH-Dateiname - FolderIconService entscheidet die tatsaechliche
+                // Eindeutigkeit endgueltig innerhalb seiner ordnerweiten Sperre (siehe dortige
+                // Erlaeuterung, Pruefbericht v2.2.0 P1) und liefert unten den tatsaechlich
+                // verwendeten Pfad zurueck.
+                string preferredImagePath = BuildUniqueAiIconImagePath(targetFolder);
+
                 Log($"KI-Icon wird erzeugt (Anbieter: {provider}, Prompt: \"{prompt}\", Zielordner: {targetFolder})...");
 
                 // AiIconService liefert an dieser Stelle bereits vollstaendig als
@@ -593,7 +719,23 @@ namespace OrdnerIconErsteller
 
         private void RefreshMenuStatus()
         {
-            _lblMenuStatus.Text = ContextMenuService.IsRegistered()
+            bool isRegistered = ContextMenuService.IsRegistered();
+
+            // Zustand des Kontrollkästchens IMMER an den tatsächlichen Registry-Zustand
+            // angleichen, statt ihm blind zu vertrauen - z.B. falls Register()/Unregister()
+            // oben fehlgeschlagen ist, damit die Checkbox dann nicht einen Zustand zeigt,
+            // der gar nicht eingetreten ist.
+            _suppressContextMenuCheckedEvent = true;
+            try
+            {
+                _chkContextMenu.Checked = isRegistered;
+            }
+            finally
+            {
+                _suppressContextMenuCheckedEvent = false;
+            }
+
+            _lblMenuStatus.Text = isRegistered
                 ? "Status: aktuell im Kontextmenü eingetragen"
                 : "Status: nicht eingetragen";
         }

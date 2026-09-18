@@ -12,7 +12,7 @@
          Kann später ergänzt werden: <ApplicationIcon>app.ico</ApplicationIcon> -->
 
     <!-- Versionsinfo -->
-    <Version>2.2.1</Version>
+    <Version>2.6.0</Version>
     <Product>Ordner-Icon-Ersteller</Product>
     <Company>Merten</Company>
     <Copyright>© Merten</Copyright>
@@ -30,6 +30,18 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="OrdnerIconErsteller.Tests" />
+  </ItemGroup>
+
+  <!-- Die mitgelieferten rechtlichen Dokumente (siehe LegalDocumentService) werden
+       hier NICHT als Ressource eingebettet, sondern als eigene Dateien neben die EXE
+       kopiert - der "Rechtliches"-Bereich im Programm liest sie zur Laufzeit direkt
+       ein, damit Programm und ausgelieferte Dateien nie auseinanderlaufen. Der
+       Installer (OrdnerIconErsteller.iss) kopiert denselben "legal"-Unterordner an
+       dieselbe relative Stelle neben die installierte EXE. -->
+  <ItemGroup>
+    <None Include="legal\*.md">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
 </Project>

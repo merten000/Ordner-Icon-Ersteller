@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Text;
 using System.Text.RegularExpressions;
 using Xunit;
 
@@ -32,6 +33,22 @@ namespace OrdnerIconErsteller.Tests
             }
         }
 
+        /// <summary>
+        /// Erzeugt echte, gültige PNG-Bytes für Referenzbild-Tests - seit Pruefbericht
+        /// v2.2.1 (Freigabeblocker 2) lädt/validiert der Scanner Bildkandidaten
+        /// tatsächlich vollständig über AiIconService.LoadReferenceImage, eine beliebige
+        /// Text-/Platzhalterdatei mit Bild-Endung genügt dafür nicht mehr.
+        /// </summary>
+        private static byte[] CreateValidPngBytes()
+        {
+            using var bmp = new System.Drawing.Bitmap(8, 8, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            using var g = System.Drawing.Graphics.FromImage(bmp);
+            g.Clear(System.Drawing.Color.CornflowerBlue);
+            using var stream = new MemoryStream();
+            bmp.Save(stream, System.Drawing.Imaging.ImageFormat.Png);
+            return stream.ToArray();
+        }
+
         [Fact]
         public void Scan_LeererOrdner_ErwaehntDasImPromptUndLiefertKeinReferenzbild()
         {
@@ -41,6 +58,7 @@ namespace OrdnerIconErsteller.Tests
                 var result = FolderContentScanner.Scan(folder);
 
                 Assert.Null(result.ReferenceImagePath);
+                Assert.Null(result.ReferenceImage);
                 Assert.Contains("leer", result.ImplicitPrompt, StringComparison.OrdinalIgnoreCase);
                 Assert.Contains(new DirectoryInfo(folder).Name, result.ImplicitPrompt);
             }
@@ -72,18 +90,53 @@ namespace OrdnerIconErsteller.Tests
         }
 
         [Fact]
-        public void Scan_OrdnerMitBild_LiefertDessenPfadAlsReferenzbildUndErwaehntEsImPrompt()
+        public void Scan_OrdnerMitGueltigemBild_LaedtEsAlsValidiertesReferenzbildErwaehntEsAberNochNichtImPrompt()
         {
+            // Pruefbericht v2.2.1, weiterer Fehler 3/4: der Scanner selbst darf den
+            // Referenz-Hinweis nicht mehr direkt in den Prompt einbauen - das entscheidet
+            // erst MainForm, NACHDEM der Benutzer der Übertragung genau dieses Bildes
+            // ausdrücklich zugestimmt hat (AiConsentService.ConfirmReferenceImage). Der
+            // Scanner liefert deshalb hier bereits das vollständig geladene/validierte
+            // ReferenceImage plus Pfad, der Prompt selbst bleibt aber unverändert.
             string folder = CreateTempFolder();
             try
             {
-                string imagePath = Path.Combine(folder, "Urlaubsfoto.jpg");
-                File.WriteAllBytes(imagePath, new byte[] { 1, 2, 3 });
+                string imagePath = Path.Combine(folder, "Urlaubsfoto.png");
+                File.WriteAllBytes(imagePath, CreateValidPngBytes());
 
                 var result = FolderContentScanner.Scan(folder);
 
                 Assert.Equal(imagePath, result.ReferenceImagePath);
-                Assert.Contains("Beispielbild", result.ImplicitPrompt);
+                Assert.NotNull(result.ReferenceImage);
+                Assert.Equal("image/png", result.ReferenceImage!.Value.MimeType);
+                Assert.DoesNotContain("Beispielbild", result.ImplicitPrompt);
+
+                string withMention = FolderContentScanner.WithReferenceImageMention(result.ImplicitPrompt);
+                Assert.Contains("Beispielbild", withMention);
+            }
+            finally
+            {
+                TryDeleteDirectory(folder);
+            }
+        }
+
+        [Fact]
+        public void Scan_OrdnerMitBeschaedigtemBild_UeberspringtEsUndSuchtWeiter()
+        {
+            // Pruefbericht v2.2.1, weiterer Fehler 3: ein ungültiger/beschädigter erster
+            // Kandidat darf nicht einfach zu "kein Referenzbild" führen, wenn danach noch
+            // ein gültiges zweites Bild im Ordner liegt.
+            string folder = CreateTempFolder();
+            try
+            {
+                File.WriteAllBytes(Path.Combine(folder, "a-kaputt.png"), Encoding.UTF8.GetBytes("kein bild"));
+                string validPath = Path.Combine(folder, "b-gueltig.png");
+                File.WriteAllBytes(validPath, CreateValidPngBytes());
+
+                var result = FolderContentScanner.Scan(folder);
+
+                Assert.Equal(validPath, result.ReferenceImagePath);
+                Assert.NotNull(result.ReferenceImage);
             }
             finally
             {
@@ -101,13 +154,14 @@ namespace OrdnerIconErsteller.Tests
             string folder = CreateTempFolder();
             try
             {
-                File.WriteAllBytes(Path.Combine(folder, "Urlaubsfoto.jpg"), new byte[] { 1, 2, 3 });
+                File.WriteAllBytes(Path.Combine(folder, "Urlaubsfoto.png"), CreateValidPngBytes());
 
                 var result = FolderContentScanner.Scan(folder, allowReferenceImage: false);
 
                 Assert.Null(result.ReferenceImagePath);
+                Assert.Null(result.ReferenceImage);
                 Assert.DoesNotContain("Beispielbild", result.ImplicitPrompt);
-                Assert.Contains("Urlaubsfoto.jpg", result.ImplicitPrompt);
+                Assert.Contains("Urlaubsfoto.png", result.ImplicitPrompt);
             }
             finally
             {

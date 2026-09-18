@@ -45,7 +45,7 @@
 ;    laufen wuerde (z.B. reines 32-Bit-Windows).
 
 #define MyAppName "Ordner-Icon-Ersteller"
-#define MyAppVersion "2.2.1"
+#define MyAppVersion "2.6.0"
 #define MyAppPublisher "Merten"
 #define MyAppExeName "OrdnerIconErsteller.exe"
 
@@ -88,6 +88,12 @@ Name: "desktopicon"; Description: "Zusaetzlich ein Symbol auf dem Desktop anlege
 
 [Files]
 Source: "{#PublishDir}\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+; Die im Programm unter "Rechtliches" angezeigten Dokumente (siehe
+; LegalDocumentService.cs) werden zur Laufzeit ueber AppContext.BaseDirectory
+; gesucht - deshalb muessen sie hier in denselben relativen Unterordner
+; "legal" neben die EXE installiert werden wie im Entwicklungs-Build
+; (csproj kopiert sie per CopyToOutputDirectory in denselben PublishDir).
+Source: "{#PublishDir}\legal\*.md"; DestDir: "{app}\legal"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

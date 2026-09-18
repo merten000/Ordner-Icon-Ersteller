@@ -71,6 +71,32 @@ namespace OrdnerIconErsteller
             return true;
         }
 
+        /// <summary>
+        /// Fragt VOR der eigentlichen Übertragung ausdrücklich nach, ob genau DIESES im
+        /// Zielordner gefundene Bild als Referenz mitgesendet werden soll (Prüfbericht
+        /// v2.2.1, weiterer Fehler 4: die allgemeine, versionierte Zustimmung oben deckt
+        /// nur pauschal ab, DASS irgendein Bild übertragen werden könnte - sie nennt nie
+        /// den konkreten Dateinamen und bietet keine Möglichkeit, im Einzelfall
+        /// abzulehnen, obwohl bei mehreren Bildern im Ordner die Auswahl von der nicht
+        /// garantierten Dateisystem-Reihenfolge abhängt). Diese Abfrage wird bewusst
+        /// NICHT dauerhaft gespeichert - sie erscheint bei jeder Erzeugung erneut, bei
+        /// der ein gültiges Referenzbild gefunden wurde, und ergänzt (ersetzt nicht) die
+        /// allgemeine Zustimmung oben.
+        /// </summary>
+        public static bool ConfirmReferenceImage(IWin32Window owner, string imagePath)
+        {
+            DialogResult result = MessageBox.Show(
+                owner,
+                $"Im Zielordner wurde folgendes Bild gefunden:\n\n{imagePath}\n\n" +
+                "Soll genau dieses Bild zusätzlich als Vorlage an Google übertragen werden?",
+                "Referenzbild mitsenden?",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Question,
+                MessageBoxDefaultButton.Button1);
+
+            return result == DialogResult.Yes;
+        }
+
         private static bool IsGiven()
         {
             try

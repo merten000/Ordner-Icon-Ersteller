@@ -121,28 +121,80 @@ namespace OrdnerIconErsteller
         /// <see cref="MaxReferenceImageBytes"/>) und die Datei tatsaechlich als
         /// Bild dekodiert - der MIME-Typ kommt danach vom erkannten Bildformat,
         /// nicht mehr blind von der Dateiendung.
+        ///
+        /// Pruefbericht v2.2.1, Freigabeblocker 2: vorher wurde die Groesse per
+        /// <see cref="FileInfo.Length"/> geprueft und die Datei ANSCHLIESSEND separat mit
+        /// <see cref="File.ReadAllBytes(string)"/> eingelesen - zwischen beiden Zugriffen
+        /// haette die Datei ausgetauscht/vergroessert werden koennen (TOCTOU), und
+        /// <see cref="File.ReadAllBytes(string)"/> selbst besass keine eigene Obergrenze.
+        /// Jetzt wird EIN einziges, geoeffnetes <see cref="FileStream"/>-Handle sowohl fuer
+        /// die Laengenpruefung als auch fuer das Einlesen verwendet (ein Ersetzen der Datei
+        /// unter demselben Pfad kann dieses Handle nicht mehr beeinflussen), und
+        /// <see cref="ReadAllBytesWithLimit"/> bricht das Lesen selbst hart ab, sobald mehr
+        /// als <see cref="MaxReferenceImageBytes"/> Byte ankommen - unabhaengig davon, was
+        /// die anfangs gelesene Laenge behauptet hat.
+        ///
+        /// Zusaetzlich erzwingt diese Methode jetzt - genau wie
+        /// <see cref="DecodeAndReencodeAsPng"/> fuer von der KI gelieferte Bilder - eine
+        /// vollstaendige Dekodierung durch Neu-Encodieren als PNG. Praktisch nachgestellt
+        /// im Pruefbericht: eine um 1.200 Byte abgeschnittene, sonst gueltige PNG wurde von
+        /// <c>Image.FromStream(..., validateImageData:true)</c> plus Zugriff auf
+        /// <c>RawFormat</c> alleine NICHT erkannt (GDI+ dekodiert dabei teils nur
+        /// Header/Metadaten) - das erzwungene Neu-Encodieren verlangt dagegen wirklich
+        /// jede Bildzeile und schlaegt bei einer abgeschnittenen Datei fehl. Zurueckgegeben
+        /// werden deshalb bewusst die NEU encodierten PNG-Bytes (MIME-Typ immer
+        /// "image/png"), nicht die urspruenglich eingelesenen Rohdaten.
         /// </summary>
         public static ReferenceImage LoadReferenceImage(string filePath)
         {
-            var fileInfo = new FileInfo(filePath);
-            if (!fileInfo.Exists)
-            {
-                throw new FileNotFoundException("Die Referenzbild-Datei wurde nicht gefunden.", filePath);
-            }
-            if (fileInfo.Length <= 0 || fileInfo.Length > MaxReferenceImageBytes)
-            {
-                throw new InvalidOperationException(
-                    $"Die Datei \"{filePath}\" ist leer oder größer als " +
-                    $"{MaxReferenceImageBytes / 1024 / 1024} MB und wird deshalb nicht als Referenzbild verwendet.");
-            }
-
-            byte[] bytes = File.ReadAllBytes(filePath);
-            string mimeType;
+            byte[] bytes;
             try
             {
-                using var stream = new MemoryStream(bytes, writable: false);
-                using var image = Image.FromStream(stream, useEmbeddedColorManagement: false, validateImageData: true);
-                mimeType = MimeTypeForRawFormat(image.RawFormat);
+                using var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+                long length = fileStream.Length;
+                if (length <= 0 || length > MaxReferenceImageBytes)
+                {
+                    throw new InvalidOperationException(
+                        $"Die Datei \"{filePath}\" ist leer oder größer als " +
+                        $"{MaxReferenceImageBytes / 1024 / 1024} MB und wird deshalb nicht als Referenzbild verwendet.");
+                }
+
+                bytes = ReadAllBytesWithLimit(fileStream, MaxReferenceImageBytes);
+            }
+            catch (FileNotFoundException)
+            {
+                throw;
+            }
+            catch (InvalidOperationException)
+            {
+                throw;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                throw new InvalidOperationException(
+                    $"Die Datei \"{filePath}\" konnte nicht gelesen werden: {ex.Message}", ex);
+            }
+
+            try
+            {
+                using var inputStream = new MemoryStream(bytes, writable: false);
+                using var image = Image.FromStream(inputStream, useEmbeddedColorManagement: false, validateImageData: true);
+
+                if (image.Width <= 0 || image.Height <= 0
+                    || (long)image.Width * image.Height > MaxPixelCount)
+                {
+                    throw new InvalidOperationException(
+                        $"Die Datei \"{filePath}\" hat unplausible Abmessungen " +
+                        $"({image.Width}x{image.Height}) und wird deshalb nicht als Referenzbild verwendet.");
+                }
+
+                using var outputStream = new MemoryStream();
+                image.Save(outputStream, ImageFormat.Png);
+                return new ReferenceImage(outputStream.ToArray(), "image/png");
+            }
+            catch (InvalidOperationException)
+            {
+                throw;
             }
             catch (Exception ex) when (ex is ArgumentException or ExternalException or OutOfMemoryException)
             {
@@ -150,17 +202,32 @@ namespace OrdnerIconErsteller
                     $"Die Datei \"{filePath}\" ist kein gültiges Bild und wird deshalb nicht als " +
                     "Referenzbild verwendet.", ex);
             }
-
-            return new ReferenceImage(bytes, mimeType);
         }
 
-        private static string MimeTypeForRawFormat(ImageFormat format)
+        /// <summary>
+        /// Liest einen Stream vollständig ein, bricht dabei aber SOFORT mit einer
+        /// <see cref="InvalidOperationException"/> ab, sobald mehr als <paramref
+        /// name="maxBytes"/> Byte gelesen wurden - unabhängig von einer vorher separat
+        /// geprüften Länge (siehe Kommentar bei <see cref="LoadReferenceImage"/>).
+        /// </summary>
+        private static byte[] ReadAllBytesWithLimit(Stream stream, long maxBytes)
         {
-            if (format.Equals(ImageFormat.Png)) return "image/png";
-            if (format.Equals(ImageFormat.Jpeg)) return "image/jpeg";
-            if (format.Equals(ImageFormat.Bmp)) return "image/bmp";
-            if (format.Equals(ImageFormat.Gif)) return "image/gif";
-            return "application/octet-stream";
+            using var buffer = new MemoryStream();
+            byte[] chunk = new byte[81920];
+            long total = 0;
+            int read;
+            while ((read = stream.Read(chunk, 0, chunk.Length)) > 0)
+            {
+                total += read;
+                if (total > maxBytes)
+                {
+                    throw new InvalidOperationException(
+                        $"Die Datei ist beim Einlesen größer als {maxBytes / 1024 / 1024} MB geworden und wird " +
+                        "deshalb nicht als Referenzbild verwendet.");
+                }
+                buffer.Write(chunk, 0, read);
+            }
+            return buffer.ToArray();
         }
 
         /// <summary>

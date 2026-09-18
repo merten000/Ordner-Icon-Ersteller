@@ -11,9 +11,11 @@ namespace OrdnerIconErsteller
     /// statt zwingend eine Texteingabe zu verlangen. Rein lesend - verändert nie etwas
     /// im Zielordner.
     ///
-    /// Enthält der Ordner bereits ein Bild, wird dessen Pfad zusätzlich als
-    /// "ReferenceImagePath" zurückgegeben - der Aufrufer (MainForm) liest es ein und
-    /// übergibt es an AiIconService, damit der Google-Anbieter (der - anders als die
+    /// Enthält der Ordner bereits ein gültiges Bild, wird es hier bereits selbst über
+    /// AiIconService.LoadReferenceImage vollständig geladen/validiert und als
+    /// "ReferenceImage" (plus "ReferenceImagePath" für Anzeige/Zustimmungsdialog)
+    /// zurückgegeben - der Aufrufer (MainForm) übergibt es nach ausdrücklicher
+    /// Zustimmung an AiIconService, damit der Google-Anbieter (der - anders als die
     /// hier verwendete OpenAI-Anbindung - Bild-Eingaben in derselben Anfrage
     /// unterstützt) sich beim neuen Icon inhaltlich/stilistisch daran orientieren kann.
     /// </summary>
@@ -38,18 +40,16 @@ namespace OrdnerIconErsteller
 
         private const int MaxListedFileNames = 25;
 
-        // Großzügige, aber endliche Obergrenze für ein als Referenz eingelesenes,
-        // bereits im Ordner vorhandenes Bild.
-        private const long MaxReferenceImageBytes = 15 * 1024 * 1024; // 15 MB
-
         internal sealed class ScanResult
         {
             public string ImplicitPrompt { get; }
+            public AiIconService.ReferenceImage? ReferenceImage { get; }
             public string? ReferenceImagePath { get; }
 
-            public ScanResult(string implicitPrompt, string? referenceImagePath)
+            public ScanResult(string implicitPrompt, AiIconService.ReferenceImage? referenceImage, string? referenceImagePath)
             {
                 ImplicitPrompt = implicitPrompt;
+                ReferenceImage = referenceImage;
                 ReferenceImagePath = referenceImagePath;
             }
         }
@@ -64,14 +64,30 @@ namespace OrdnerIconErsteller
         /// obwohl nur Google es tatsaechlich als Bild-Eingabe erhaelt (siehe
         /// AiIconService.ReferenceImage). Der Aufrufer (MainForm) uebergibt hier
         /// deshalb explizit, ob der aktuell gewaehlte Anbieter ueberhaupt ein
-        /// Referenzbild verwenden kann - nur dann taucht es im Prompt auf und wird
-        /// als ReferenceImagePath zurueckgegeben.
+        /// Referenzbild verwenden kann.
         /// </param>
+        /// <remarks>
+        /// Pruefbericht v2.2.1, weiterer Fehler 3: vorher wurde allein anhand von
+        /// Endung und vorab gelesener Groesse der ERSTE Bildkandidat gewaehlt und
+        /// sofort der Referenz-Satz in den Prompt uebernommen - scheiterte das
+        /// anschliessende Einlesen (z.B. beschaedigtes Bild), blieb der bereits
+        /// gebaute Prompt trotzdem stehen, und ein evtl. vorhandenes zweites,
+        /// gueltiges Bild wurde nie gesucht. Jetzt werden ALLE Bildkandidaten
+        /// gesammelt und der Reihe nach ueber AiIconService.LoadReferenceImage
+        /// tatsaechlich geladen UND vollstaendig validiert, bis der erste
+        /// tatsaechlich gueltige gefunden wird. Das <see cref="ScanResult.ImplicitPrompt"/>
+        /// erwaehnt ein Referenzbild deshalb bewusst NICHT mehr selbst - das
+        /// entscheidet erst der Aufrufer (MainForm), NACHDEM der Benutzer der
+        /// konkreten Uebertragung dieses einen Bildes ausdruecklich zugestimmt hat
+        /// (siehe AiConsentService.ConfirmReferenceImage, Pruefbericht v2.2.1,
+        /// weiterer Fehler 4) - erst dann wird <see cref="WithReferenceImageMention"/>
+        /// aufgerufen.
+        /// </remarks>
         public static ScanResult Scan(string folderPath, bool allowReferenceImage = true)
         {
             var relevantEntries = new List<string>();
             bool hasMoreThanListed = false;
-            string? referenceImagePath = null;
+            var imageCandidatePaths = allowReferenceImage ? new List<string>() : null;
 
             foreach (string path in Directory.EnumerateFileSystemEntries(folderPath))
             {
@@ -88,9 +104,8 @@ namespace OrdnerIconErsteller
                 // 25-Namen-Grenze zunaechst saemtliche Eintraege") - bei sehr
                 // grossen Ordnern wuerde sonst unnoetig eine komplette, ggf. sehr
                 // lange Liste im Speicher aufgebaut, obwohl spaeter ohnehin nur die
-                // ersten 25 Namen in den Prompt uebernommen werden. Die Suche nach
-                // einem Referenzbild laeuft unabhaengig davon ueber alle Eintraege
-                // weiter, bis eines gefunden ist.
+                // ersten 25 Namen in den Prompt uebernommen werden. Das Sammeln der
+                // Bildkandidaten laeuft unabhaengig davon ueber alle Eintraege weiter.
                 if (relevantEntries.Count < MaxListedFileNames)
                 {
                     relevantEntries.Add(isDirectory ? name + "/" : name);
@@ -100,29 +115,47 @@ namespace OrdnerIconErsteller
                     hasMoreThanListed = true;
                 }
 
-                if (allowReferenceImage && referenceImagePath is null && !isDirectory && IsImageFile(name))
+                if (imageCandidatePaths is not null && !isDirectory && IsImageFile(name))
+                {
+                    imageCandidatePaths.Add(path);
+                }
+            }
+
+            AiIconService.ReferenceImage? referenceImage = null;
+            string? referenceImagePath = null;
+            if (imageCandidatePaths is not null)
+            {
+                foreach (string candidatePath in imageCandidatePaths)
                 {
                     try
                     {
-                        long length = new FileInfo(path).Length;
-                        if (length > 0 && length <= MaxReferenceImageBytes)
-                        {
-                            referenceImagePath = path;
-                        }
+                        referenceImage = AiIconService.LoadReferenceImage(candidatePath);
+                        referenceImagePath = candidatePath;
+                        break;
                     }
-                    catch (IOException)
+                    catch (Exception ex) when (ex is FileNotFoundException or InvalidOperationException or IOException)
                     {
-                        // Datei gerade nicht lesbar (z.B. kurzzeitig gesperrt) - einfach
-                        // überspringen, das Scannen darf dadurch nicht insgesamt fehlschlagen.
+                        // Ungueltiger/beschaedigter/gerade nicht lesbarer Kandidat -
+                        // naechsten versuchen statt das ganze Scannen abzubrechen.
                     }
                 }
             }
 
             string folderName = new DirectoryInfo(folderPath).Name;
-            string prompt = BuildImplicitPrompt(folderName, relevantEntries, hasMoreThanListed, referenceImagePath is not null);
+            string prompt = BuildImplicitPrompt(folderName, relevantEntries, hasMoreThanListed);
 
-            return new ScanResult(prompt, referenceImagePath);
+            return new ScanResult(prompt, referenceImage, referenceImagePath);
         }
+
+        /// <summary>
+        /// Haengt nachtraeglich den Hinweis auf ein mitgeliefertes Referenzbild an
+        /// einen bereits gebauten Prompt an - wird von MainForm erst NACH der
+        /// ausdruecklichen Zustimmung zu genau diesem Bild aufgerufen (siehe Kommentar
+        /// bei <see cref="Scan"/>).
+        /// </summary>
+        internal static string WithReferenceImageMention(string basePrompt) =>
+            basePrompt + " Es wird zusätzlich ein Beispielbild aus dem Ordner mitgeliefert - orientiere dich " +
+            "an dessen Motiv/Stil für das neue Icon.";
 
         private static bool IsIgnored(string name)
         {
@@ -161,7 +194,7 @@ namespace OrdnerIconErsteller
             return false;
         }
 
-        internal static string BuildImplicitPrompt(string folderName, List<string> entries, bool hasMoreThanListed, bool hasReferenceImage)
+        internal static string BuildImplicitPrompt(string folderName, List<string> entries, bool hasMoreThanListed)
         {
             var sb = new StringBuilder();
             sb.Append("Erstelle ein einfaches, minimalistisches Icon-Symbol, das gut zu einem Ordner mit dem Namen \"")
@@ -182,12 +215,6 @@ namespace OrdnerIconErsteller
             else
             {
                 sb.Append(" Der Ordner ist aktuell leer - orientiere dich ausschließlich am Ordnernamen.");
-            }
-
-            if (hasReferenceImage)
-            {
-                sb.Append(" Es wird zusätzlich ein Beispielbild aus dem Ordner mitgeliefert - orientiere dich " +
-                          "an dessen Motiv/Stil für das neue Icon.");
             }
 
             sb.Append(" Das Ergebnis soll sich klar als kleines Ordner-Icon eignen: ein einzelnes, klar " +

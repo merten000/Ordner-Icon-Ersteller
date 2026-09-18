@@ -1,4 +1,342 @@
-# Ordner-Icon-Ersteller (Version 2.2.1 – komplette Neuentwicklung)
+# Ordner-Icon-Ersteller (Version 2.6.0 – komplette Neuentwicklung)
+
+## "Einstellungen"/"Rechtliches" als aufklappendes Dropdown-Menü unter dem Knopf (v2.5.0 → v2.6.0)
+
+Merten-Feedback nach dem v2.5.0-Test (die gemeinsame "Menü ▾"-ComboBox
+war nicht gemeint): "Oben rechts steht das Rechtliche, links davon die
+Einstellung. Man tippt auf den Button, und darunter klappt automatisch
+der jeweilige Inhalt zum Anklicken auf - genau das normale
+Windows-Standardverhalten eines Dropdown-Menüs unter einem Knopf."
+
+Umgesetzt mit der dafür vorgesehenen WinForms-Technik: zwei eigene
+Knöpfe ("Einstellungen" links, "Rechtliches" rechts, wie ursprünglich in
+v2.4.x) mit je einem `ContextMenuStrip`, der per `Show(button, new
+Point(0, button.Height))` direkt unterhalb des jeweiligen Knopfes
+aufklappt - das ist die eingebaute Standardtechnik für genau dieses
+Verhalten (kein selbstgebautes Panel, kein Popup-Fenster). Die beiden
+Menüs werden nur EINMAL in `BuildLayout()` befüllt und danach für die
+gesamte Laufzeit wiederverwendet: "Einstellungen" enthält den
+Rechtsklick-Menü-Schalter mit Status (über `ToolStripControlHost`
+eingebettet), "Rechtliches" die vier Dokumente als normale Menüpunkte.
+Weil hier - anders als bei der vorherigen Fenster-Lösung (v2.4.0/
+v2.4.1) - nichts pro Klick neu erzeugt oder disposed wird, kann das
+"Cannot access a disposed object"-Problem von v2.4.1 hier gar nicht
+erst auftreten.
+
+## "Einstellungen"/"Rechtliches" als Dropdown-Liste statt zweier Knöpfe (v2.4.1 → v2.5.0)
+
+Merten-Feedback (Foto vom laufenden v2.4.1-Test, mit geöffneter
+Anbieter-Auswahlliste OpenAI/Google): "Das mit dem Rechtlichen und
+Einstellungen soll genauso aufgelistet werden wie bei der API-Key-
+Wechsel-Liste." Gemeint ist die ComboBox (DropDownList), mit der weiter
+unten zwischen OpenAI und Google gewechselt wird.
+
+Die beiden einzelnen Knöpfe in der oberen Leiste wurden deshalb durch
+eine einzige ComboBox derselben Art ersetzt (`_cmbTopMenu`). Sie zeigt
+als ersten, reinen Platzhaltereintrag "Menü ▾" und danach "Einstellungen"
+sowie "Rechtliches". Nach jeder Auswahl öffnet sich sofort das jeweilige
+Fenster (dieselbe `ShowSettingsWindow()`/`ShowRechtlichesWindow()`-Technik
+wie zuvor) und die ComboBox springt automatisch zurück auf den
+Platzhalter - so bleibt sie ein wiederholt benutzbares Menü statt einer
+dauerhaften Auswahl wie bei der Anbieter-Liste.
+
+## Absturz beim zweiten Öffnen von "Einstellungen"/"Rechtliches" behoben (v2.4.0 → v2.4.1)
+
+Merten-Test von v2.4.0: die neuen Fenster erschienen zwar (Leiste oben
+bündig, korrekt), aber beim (zweiten) Öffnen stürzte das Programm mit
+"Unbehandelte Ausnahme... Cannot access a disposed object. Object name:
+'System.Windows.Forms.Button'." ab (Fehlerdialog-Screenshot).
+
+Ursache: `ShowSettingsWindow()`/`ShowRechtlichesWindow()` fügen die
+dauerhaften Feld-Controls (`_chkContextMenu`, `_lblMenuStatus` bzw.
+`_btnImpressum`/`_btnDatenschutz`/`_btnLizenz`/`_btnHaftungsausschluss`)
+direkt in den `content`-Container des jeweiligen Dialog-Fensters ein. Beim
+Schließen des Dialogs löst das umschließende `using`-Statement
+`dlg.Dispose()` aus - das entsorgt rekursiv ALLE noch enthaltenen
+Kind-Controls, also auch diese eigentlich wiederverwendbaren, dauerhaften
+Buttons/Checkbox/Label. Beim zweiten Klick auf "Einstellungen" oder
+"Rechtliches" versuchte das Programm dann, bereits entsorgte
+(`disposed`) Controls erneut anzuzeigen - daher der Absturz.
+
+Fix: in beiden Methoden werden die dauerhaften Feld-Controls jetzt in
+einem `finally`-Block direkt nach `ShowDialog()` wieder aus dem
+`content`-Container entfernt (`Controls.Remove(...)`), BEVOR der Dialog
+am Ende der Methode disposed wird. `Controls.Remove()` löst nur die
+Eltern-Kind-Beziehung, ohne das Control selbst zu entsorgen - beim
+nächsten Öffnen sind die Controls dadurch wieder unversehrt verfügbar.
+
+## Einstellungen/Rechtliches als eigene Fenster statt Klapp-Panel (v2.3.6 → v2.4.0)
+
+Merten-Test von v2.3.6: Klick auf "Einstellungen"/"Rechtliches" zeigte
+IMMER NOCH nichts an - identisch zum Verhalten in v2.3.3 bis v2.3.6, trotz
+mehrerer grundverschiedener Lösungsansätze (TableLayoutPanel-Spalte,
+schwebendes Overlay, eingebettetes FlowLayoutPanel, Dock=Right-Container).
+Merten-Vorschlag: die Knöpfe in eine eigene Leiste oben einfügen, damit es
+bündig bleibt.
+
+Statt eines weiteren Versuchs mit einem ein-/ausklappbaren Panel (dessen
+Sichtbarkeits-/Größenberechnung sich in dieser Entwicklungsumgebung
+wiederholt nicht zuverlässig nachstellen ließ) wird jetzt dieselbe,
+bereits nachweislich funktionierende Technik verwendet wie bei den vier
+Rechtliches-Dokumenten: ein Klick öffnet ein eigenes kleines Fenster
+(`Form.ShowDialog`, wie schon bei `LegalDocumentViewerForm`).
+
+- **Obere Werkzeugleiste** (`MainForm.cs`, neuer `topBar`): Die zwei
+  Knöpfe "Einstellungen" und "Rechtliches" sitzen jetzt in einer über die
+  volle Fensterbreite angedockten Leiste (`Dock = DockStyle.Top`) oben,
+  rechtsbündig ausgerichtet - mit demselben rechten Randabstand (12px)
+  wie der übrige Inhalt darunter, damit es bündig wirkt.
+- **`ShowSettingsWindow()`**: öffnet ein eigenes kleines Fenster mit dem
+  Kontrollkästchen "Ins Rechtsklick-Menü integrieren" und dem Status-Text.
+- **`ShowRechtlichesWindow()`**: öffnet ein eigenes kleines Fenster mit
+  den vier bekannten Knöpfen (Impressum, Datenschutz, Lizenz,
+  Haftungsausschluss), die wie gehabt die jeweiligen Dokumente anzeigen.
+
+Das komplette bisherige "Band"-Konzept (Panel/FlowLayoutPanel-Container,
+Visible-Umschaltung) wurde entfernt. Fensterbreite beim Start wieder auf
+660 reduziert (die obere Leiste braucht keine zusätzliche Fensterbreite
+mehr wie das seitliche Band). Version auf 2.4.0 angehoben (größerer
+Konzeptwechsel, deshalb Minor- statt Patch-Version).
+
+## Grundlegend robusteres Layout: Docking statt TableLayoutPanel-Spalten (v2.3.5 → v2.3.6)
+
+Merten-Test von v2.3.5: Klick auf "Einstellungen"/"Rechtliches" zeigte
+IMMER NOCH nichts an - identisch zum Verhalten in v2.3.3/v2.3.4. Zusätzlich
+neu aufgefallen: Der API-Schlüssel-Bereich war zu eng geworden, der
+"Löschen"-Knopf praktisch unsichtbar/abgeschnitten.
+
+Ursache für beides: Die gemeinsame `TableLayoutPanel`-Konstruktion mit
+einer `SizeType.AutoSize`-Spalte für das rechte Band UND einer festen
+`SizeType.Absolute`-Breite für den linken Bereich (aus v2.3.3) hat sich
+als zu fragil erwiesen - zum einen berechnet eine `AutoSize`-Spalte ihre
+Breite beim späteren Auf-/Zuklappen von Kindelementen (Visible-Wechsel)
+nicht zuverlässig neu (das erklärt, warum trotz mehrerer Korrekturversuche
+beim Klick nichts erschien), zum anderen war die feste Breite (480px) für
+den linken Bereich zu knapp bemessen.
+
+Das Layout wurde grundlegend umgebaut: Statt einer gemeinsamen
+`TableLayoutPanel` mit mehreren Spalten gibt es jetzt zwei unabhängig
+angedockte Bereiche direkt im Fenster:
+
+- `rightBandContainer`: rechts angedockt (`Dock = DockStyle.Right`), mit
+  FESTER Breite (300px) - dadurch muss beim Auf-/Zuklappen der Felder
+  keine Spaltenbreite mehr neu berechnet werden, nur der Inhalt innerhalb
+  der bereits vorhandenen, unveränderlichen Breite. Enthält weiterhin die
+  zwei Umschalt-Knöpfe sowie die beiden auf-/zuklappbaren Felder
+  (unverändert aus v2.3.5: normale `FlowLayoutPanel`, `Visible`-Umschaltung).
+- `leftContent`: füllt den gesamten Rest (`Dock = DockStyle.Fill`) - exakt
+  die Struktur (einspaltige `TableLayoutPanel`, `Percent(100)`-Breite),
+  die vor der Einführung des rechten Bands schon zuverlässig funktioniert
+  hat. Der API-Schlüssel-Bereich bekommt dadurch wieder genug Platz.
+
+Bei Docking bestimmt die Hinzufüge-Reihenfolge die Aufteilung: `leftContent`
+(Dock=Fill) wird ZUERST hinzugefügt, danach `rightBandContainer`
+(Dock=Right), damit dieser seinen festen Platz vom Fill-Bereich
+"abzwackt". Fensterbreite beim Start auf 900 angehoben (600 für den
+linken Bereich + 300 für das Band), Version auf 2.3.6.
+
+## Fix: Overlay-Panels durch bewährte eingebettete Panels ersetzt (v2.3.4 → v2.3.5)
+
+Merten-Test von v2.3.4: Auch nach dem `Panel` → `FlowLayoutPanel`-Fix blieb
+beim Klick auf "Einstellungen"/"Rechtliches" weiterhin nichts sichtbar.
+Das schwebende Overlay-Konzept (Panels frei im Fenster mit über
+`PointToScreen`/`PointToClient` berechneter Position, `BringToFront()`)
+ließ sich in dieser Entwicklungsumgebung nicht gegenprüfen und war damit
+zu unsicher - vermutlich griff dabei ein weiterer WinForms-Sonderfall
+(Layout-Berechnung eines nie sichtbar gewesenen, freistehenden Steuerelements).
+
+`_settingsPanel`/`_legalPanel` sitzen jetzt wieder ganz regulär IM
+selben `FlowLayoutPanel` wie die zwei Umschalt-Knöpfe (statt frei im
+Fenster) - Sichtbarkeit einfach über `Visible = true/false` auf einem
+normal eingebetteten `FlowLayoutPanel`, eine bewährte, zuverlässig
+funktionierende Technik. `ToggleOverlayPanel()` wurde entfernt.
+
+Einziger Unterschied zum ursprünglich gewünschten "Layer": Der
+Log-Bereich kann sich beim Aufklappen minimal nach unten verschieben,
+statt dass sich das Panel darüber legt - laut Merten-Feedback ("kann
+ruhig...") unkritisch. Die bündige Positionierung oben rechts (v2.3.3)
+bleibt unverändert. Version auf 2.3.5 angehoben.
+
+## Fix: Panels blieben unsichtbar (v2.3.3 → v2.3.4)
+
+Merten-Test von v2.3.3: Klick auf "Einstellungen"/"Rechtliches" zeigte gar
+nichts an. Ursache: `_settingsPanel`/`_legalPanel` waren als einfaches
+`System.Windows.Forms.Panel` angelegt - ein einfaches `Panel` berechnet
+seine Größe bei `AutoSize=true` NICHT automatisch anhand seines Inhalts
+(offiziell dokumentierte Einschränkung dieser Klasse), wodurch die Panels
+praktisch in ihrer Standardgröße/-position blieben statt sich um ihren
+tatsächlichen Inhalt zu legen.
+
+Beide Felder sind jetzt selbst `FlowLayoutPanel` (wie an anderen Stellen
+im Programm bereits verwendet) statt eines einfachen `Panel` mit
+zusätzlichem `FlowLayoutPanel`-Wrapper darin - `FlowLayoutPanel`
+unterstützt echtes `AutoSize` zuverlässig. Die bisherige Logik (bündige
+Positionierung neben der linken Bedienung, Aufklappen als Layer über der
+Oberfläche via `ToggleOverlayPanel`) bleibt unverändert, nur die
+Klassenwahl der beiden Felder wurde korrigiert. Version auf 2.3.4
+angehoben.
+
+## Band bündig ausgerichtet, Panels als Layer statt Platzhalter (v2.3.2 → v2.3.3)
+
+Zwei weitere Rückmeldungen nach dem Test von v2.3.2 umgesetzt:
+
+1. **Band bündig statt am Fensterrand** (`MainForm.cs`): Bei einem breiter
+   gezogenen Fenster klaffte zwischen der linken Bedienung und den beiden
+   Knöpfen "Einstellungen"/"Rechtliches" eine große Lücke, weil die linke
+   Spalte den gesamten verfügbaren Platz beanspruchte (`Percent(100)`) und
+   die rechte Spalte dadurch an den Fensterrand gedrückt wurde. Das
+   Hauptlayout hat jetzt drei Spalten: Spalte 0 (linke Bedienung) hat eine
+   feste Breite, Spalte 1 (die zwei Knöpfe) sitzt direkt daneben, und eine
+   neue, inhaltsleere Füllspalte 2 nimmt bei einem breiteren Fenster den
+   übrigen Platz auf. Dadurch bleiben Bedienung und Knöpfe bündig
+   zusammen, unabhängig von der Fenstergröße. Fensterbreite beim Start von
+   640 auf 760 angehoben, damit dafür genug Platz vorhanden ist.
+2. **Aufgeklappte Panels liegen jetzt als Layer über der Oberfläche**
+   (`MainForm.cs`): Die beiden Panels (Einstellungen, Rechtliches) waren
+   bisher Teil des Tabellenlayouts und haben beim Aufklappen andere
+   Bereiche nach unten weggeschoben. Sie hängen jetzt direkt im Fenster
+   (nicht mehr im TableLayoutPanel) mit einer beim Klick berechneten
+   Position direkt unter dem jeweiligen Knopf (neue Methode
+   `ToggleOverlayPanel`) und werden per `BringToFront()` über die übrige
+   Oberfläche gelegt, statt Platz im Layout zu beanspruchen.
+
+Version auf 2.3.3 angehoben.
+
+## Rechtes Band jetzt einklappbar (v2.3.1 → v2.3.2)
+
+Nach dem ersten Test des Bands ("Rechtliches" oben rechts, Checkbox fürs
+Rechtsklick-Menü) eine weitere Rückmeldung umgesetzt: Beide Bereiche waren
+dauerhaft sichtbar, sollen aber erst nach Klick erscheinen.
+
+Das rechte Band besteht jetzt aus zwei Umschalt-Knöpfen nebeneinander -
+"Einstellungen" (links) und "Rechtliches" (rechts) - und darunter zwei
+Panels, die standardmäßig eingeklappt (unsichtbar) sind:
+
+- Klick auf "Einstellungen" klappt das Panel mit dem Kontrollkästchen
+  "Ins Rechtsklick-Menü integrieren" auf/zu (Inhalt unverändert aus
+  v2.3.1 - siehe unten - nur jetzt hinter diesem Knopf versteckt statt
+  dauerhaft sichtbar).
+- Klick auf "Rechtliches" klappt das Panel mit den vier Knöpfen
+  (Impressum, Datenschutz, Lizenz, Haftungsausschluss) auf/zu.
+
+Beide Panels lassen sich unabhängig voneinander auf-/zuklappen. Version
+auf 2.3.2 angehoben.
+
+## Layout & Rechtsklick-Schalter überarbeitet (v2.3.0 → v2.3.1)
+
+Nach dem ersten praktischen Test des Rechtliches-Bereichs zwei
+Rückmeldungen umgesetzt:
+
+1. **Rechtliches-Band oben rechts** (`MainForm.cs`): Die vier Knöpfe
+   (Impressum, Datenschutz, Lizenz, Haftungsausschluss) saßen bisher als
+   breite Knopfreihe zwischen den übrigen Bereichen. Das Hauptlayout ist
+   jetzt zweispaltig: Die linke Spalte enthält weiterhin die komplette
+   bisherige Bedienung, in der rechten, schmalen Spalte sitzen die vier
+   Knöpfe UNTEREINANDER als eigenes "Band" in der oberen rechten Ecke des
+   Fensters. Das Log bleibt unten über die volle Fensterbreite.
+2. **Rechtsklick-Menü als Kontrollkästchen statt zwei Knöpfen**
+   (`MainForm.cs`): "Ins Rechtsklick-Menü integrieren" und "Aus
+   Rechtsklick-Menü entfernen" sind zu einem einzigen Kontrollkästchen
+   zusammengefasst, das direkt den gewünschten Zustand einstellt (an =
+   eingetragen, aus = entfernt). Der Haken wird nach jedem Register()/
+   Unregister()-Aufruf sowie beim Programmstart immer an den tatsächlichen
+   Registry-Zustand angeglichen (`RefreshMenuStatus`), damit er nie einen
+   Zustand zeigt, der wegen eines Fehlers gar nicht eingetreten ist; ein
+   Sperr-Flag verhindert, dass dieses programmatische Setzen selbst
+   nochmal Register()/Unregister() auslöst.
+
+Außerdem die Platzhalter im Impressum durch die tatsächlichen Angaben
+ersetzt (Anschrift, Kontakt-E-Mail). Version auf 2.3.1 angehoben.
+
+Noch offen: eine Installer-Checkbox, mit der die Rechtsklick-Integration
+bereits bei der Installation aktiviert werden kann (bisher weiterhin
+ausschließlich über das Kontrollkästchen im Programm selbst einstellbar,
+wie es aus Sicherheitsgründen bereits vorher so war) - das folgt bei
+Bedarf als nächster, separater Schritt.
+
+## Rechtliches-Bereich ergänzt (v2.2.2 → v2.3.0)
+
+Neuer Bereich "Rechtliches" im Hauptfenster mit vier Schaltflächen (Impressum,
+Datenschutz, Lizenz, Haftungsausschluss), die die im Unterordner `legal/`
+mitgelieferten Dokumente direkt im Programm anzeigen (`LegalDocumentService.cs`,
+`LegalDocumentViewerForm.cs`) - bewusst keine zweite, unabhängig gepflegte
+Textkopie im Code: Programm und mitgelieferte Dateien können dadurch nicht
+auseinanderlaufen. Fehlt eine Datei (z. B. bei unvollständiger Installation),
+erscheint eine verständliche Meldung statt eines Absturzes.
+
+Das Impressum enthält nach Rücksprache das vollständige Set (Name,
+ladungsfähige Anschrift, Kontakt-E-Mail, keine Telefonnummer) gemäß § 5 DDG,
+da das Programm öffentlich angeboten werden soll - Anschrift und E-Mail sind
+aktuell als Platzhalter markiert und werden ergänzt, sobald die konkreten
+Angaben vorliegen. Datenschutz und Haftungsausschluss beschreiben konkret die
+einzige Datenübertragung des Programms (die optionale KI-Icon-Funktion).
+
+Die Dateien werden per `csproj` (`CopyToOutputDirectory`) neben die EXE
+kopiert und vom Installer in denselben relativen Unterordner `legal`
+installiert, damit `AppContext.BaseDirectory` sie in Entwicklungs-Build und
+installierter Version gleichermaßen zuverlässig findet. Version auf 2.3.0
+angehoben. Tests ergänzt (`LegalDocumentServiceTests`: Pfadaufbau, Einlesen
+vorhandener Dateien, verständliche Fehlermeldung bei fehlender Datei).
+
+Noch offen aus der ursprünglichen Planung: die "Einstellungen"-Ansicht mit
+dem verschobenen Rechtsklick-Menü-Schalter (an/ausschaltbar) plus
+Installer-Checkbox für die Rechtsklick-Integration - das folgt als
+nächster, separater Schritt.
+
+## 7. ChatGPT-Gegenprüfung behoben (v2.2.1 → v2.2.2)
+
+Die 7. ChatGPT-Gegenprüfung (Commit 1a04de8, v2.2.1) fand 2 Freigabeblocker
+und 2 weitere Restpunkte:
+
+1. **Reentrancy-Race beim Hintergrund-Scan** (`MainForm.cs`): Seit der 6.
+   Gegenprüfung läuft `FolderContentScanner.Scan` über `Task.Run`, die
+   Bedienelemente wurden aber erst NACH diesem Scan, dem Referenzbild-Laden,
+   der Zustimmung und der Namensberechnung gesperrt. Ein zweiter Klick auf
+   "Icon per KI erzeugen" während eines langsamen Scans konnte dadurch einen
+   parallelen zweiten Ablauf starten, der sich mit dem ersten gegenseitig über
+   `_aiOperationInProgress`/die Bedienelement-Sperre entsperrt hätte.
+   `GenerateAiIconAsync` sperrt jetzt ganz am Anfang - noch vor dem Scan -
+   und legt Scan, Zustimmung, Netzwerkanfrage und Dateitransaktion zusammen in
+   ein einziges `try/finally`; ein früher Ausstieg, falls bereits eine
+   Operation läuft, dient als zusätzliches Sicherheitsnetz.
+2. **Referenzbildprüfung akzeptierte abgeschnittene Bilder (TOCTOU)**
+   (`AiIconService.cs`): `LoadReferenceImage` las Größe und Inhalt bisher über
+   zwei getrennte Zugriffe (`FileInfo.Length`, dann `File.ReadAllBytes`) - dazwischen
+   konnte die Datei ausgetauscht/vergrößert werden, und `Image.FromStream(...,
+   validateImageData:true)` allein erkannte eine um 1.200 Byte gekürzte, sonst
+   gültige PNG nicht (GDI+ dekodiert dabei teils nur Header/Metadaten). Jetzt
+   wird die Datei über ein einziges `FileStream`-Handle gelesen (Länge und
+   Inhalt vom selben Handle, zusätzlich hart auf die Obergrenze begrenzt) und
+   danach - genau wie bei von der KI gelieferten Bildern
+   (`DecodeAndReencodeAsPng`) - vollständig dekodiert und als PNG neu
+   encodiert; nur diese neu encodierten Bytes werden weitergegeben.
+3. **Prompt behauptete Bildübertragung auch bei ungültigem/keinem Bild**
+   (`FolderContentScanner.cs`, `MainForm.cs`): Der Scanner wählte bisher allein
+   anhand von Endung/Größe den ersten Bildkandidaten und baute sofort den
+   Referenz-Satz in den Prompt ein; scheiterte das Laden später, blieb der
+   Satz trotzdem stehen, und ein gültiges zweites Bild wurde nie gesucht.
+   `Scan` sammelt jetzt alle Bildkandidaten und lädt/validiert sie der Reihe
+   nach vollständig, bis das erste gültige gefunden ist (ungültige werden
+   übersprungen); der Referenz-Satz wird dem Prompt erst nachträglich
+   angehängt (`WithReferenceImageMention`), nachdem feststeht, dass das Bild
+   tatsächlich verwendet wird.
+4. **Keine Bestätigung des konkreten Bildnamens** (`AiConsentService.cs`,
+   `MainForm.cs`): Die allgemeine, versionierte Zustimmung deckte nur pauschal
+   ab, dass irgendein Bild übertragen werden könnte, ohne den Dateinamen zu
+   nennen oder eine Ablehnung im Einzelfall zu erlauben. Eine neue, nicht
+   dauerhaft gespeicherte Abfrage (`AiConsentService.ConfirmReferenceImage`)
+   zeigt jetzt vor jeder Erzeugung mit gefundenem Referenzbild dessen
+   konkreten Pfad an und lässt die Übertragung einzeln bestätigen oder
+   ablehnen.
+
+Tests ergänzt: `AiIconServiceTests` (abgeschnittene echte PNG wird abgelehnt,
+gültiges Bild liefert vollständig dekodierbares neu encodiertes PNG statt
+Byte-Identität), `FolderContentScannerTests` (Referenzbild wird vollständig
+geladen/validiert, aber nicht mehr automatisch im Prompt erwähnt; ein
+beschädigter erster Kandidat wird übersprungen und ein gültiger zweiter
+gefunden). Von Merten lokal gebaut und getestet. Die Reentrancy-Sperre selbst
+ist - wie andere reine UI-Thread-Logik in `MainForm` - nicht durch einen
+automatisierten Test abgedeckt, sondern per Code-Review verifiziert.
 
 ## 6. ChatGPT-Gegenprüfung behoben (v2.2.0 → v2.2.1)
 

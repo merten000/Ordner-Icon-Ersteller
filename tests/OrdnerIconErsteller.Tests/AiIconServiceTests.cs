@@ -170,17 +170,51 @@ namespace OrdnerIconErsteller.Tests
         // LoadReferenceImage selbst weder pruefte noch begrenzte irgendetwas).
 
         [Fact]
-        public void LoadReferenceImage_GueltigesPng_LiefertBytesUndErkanntenMimeType()
+        public void LoadReferenceImage_GueltigesPng_LiefertVollstaendigDekodierbaresNeuEncodiertesPng()
         {
+            // Pruefbericht v2.2.1, Freigabeblocker 2: LoadReferenceImage encodiert das
+            // Bild jetzt selbst neu als PNG (genau wie DecodeAndReencodeAsPng), statt die
+            // urspruenglich eingelesenen Rohbytes unveraendert zurueckzugeben - die
+            // zurueckgegebenen Bytes muessen deshalb nicht mehr byte-identisch mit der
+            // Ausgangsdatei sein, wohl aber selbst wieder ein gueltiges PNG mit denselben
+            // Abmessungen ergeben.
             string tempFile = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".png");
-            byte[] pngBytes = CreateValidPngBytes(Color.SeaGreen);
+            byte[] pngBytes = CreateValidPngBytes(Color.SeaGreen, width: 12, height: 12);
             File.WriteAllBytes(tempFile, pngBytes);
             try
             {
                 AiIconService.ReferenceImage result = AiIconService.LoadReferenceImage(tempFile);
 
-                Assert.Equal(pngBytes, result.Bytes);
                 Assert.Equal("image/png", result.MimeType);
+                using var stream = new MemoryStream(result.Bytes);
+                using var image = Image.FromStream(stream);
+                Assert.Equal(12, image.Width);
+                Assert.Equal(12, image.Height);
+            }
+            finally
+            {
+                File.Delete(tempFile);
+            }
+        }
+
+        [Fact]
+        public void LoadReferenceImage_AbgeschnitteneEchtePng_WirftInvalidOperationException()
+        {
+            // Pruefbericht v2.2.1, Freigabeblocker 2: praktisch nachgestellter Fund - eine
+            // gueltige PNG, bei der die letzten 1.200 Byte entfernt wurden, wurde von der
+            // vorherigen Fassung (Image.FromStream(..., validateImageData:true) plus
+            // Zugriff auf RawFormat) faelschlich als gueltiges Referenzbild akzeptiert.
+            string tempFile = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".png");
+            byte[] original = CreateValidNoisePngBytes(width: 64, height: 64);
+            Assert.True(original.Length > 4000,
+                "Das Test-Rauschbild muss deutlich größer als die simulierte Kürzung sein.");
+            byte[] truncated = new byte[original.Length - 1200];
+            Array.Copy(original, truncated, truncated.Length);
+            File.WriteAllBytes(tempFile, truncated);
+            try
+            {
+                var ex = Assert.Throws<InvalidOperationException>(() => AiIconService.LoadReferenceImage(tempFile));
+                Assert.Contains("kein gültiges Bild", ex.Message);
             }
             finally
             {
