@@ -55,7 +55,7 @@
 ;    laufen wuerde (z.B. reines 32-Bit-Windows).
 
 #define MyAppName "Ordner-Icon-Ersteller"
-#define MyAppVersion "2.7.1"
+#define MyAppVersion "2.7.2"
 #define MyAppPublisher "Merten"
 #define MyAppExeName "OrdnerIconErsteller.exe"
 
@@ -109,6 +109,12 @@ Source: "{#PublishDir}\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 ; "legal" neben die EXE installiert werden wie im Entwicklungs-Build
 ; (csproj kopiert sie per CopyToOutputDirectory in denselben PublishDir).
 Source: "{#PublishDir}\legal\*.md"; DestDir: "{app}\legal"; Flags: ignoreversion
+; Pruefbericht v2.7.1, Freigabeblocker 1: .NET-Lizenz und Drittanbieterhinweise der
+; gebuendelten, selbstenthaltenen .NET-Runtime (Microsoft.NETCore.App.Runtime.win-x64
+; 8.0.31) muessen bei einer selbstenthaltenen .NET-Binaerdistribution mitgeliefert
+; werden. Liegen unveraendert im Unterordner "legal\dotnet-runtime" (siehe csproj)
+; und werden genauso wie die eigenen Rechtstexte installiert.
+Source: "{#PublishDir}\legal\dotnet-runtime\*.TXT"; DestDir: "{app}\legal\dotnet-runtime"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

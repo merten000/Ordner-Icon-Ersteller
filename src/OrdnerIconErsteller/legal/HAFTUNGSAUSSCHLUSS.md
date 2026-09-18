@@ -6,8 +6,11 @@ nicht beschränkt auf die Marktgängigkeit oder Eignung für einen bestimmten
 Zweck. Die Nutzung erfolgt auf eigene Verantwortung.
 
 Der Autor haftet nicht für Datenverlust, Schäden oder Folgeschäden, die durch
-die Nutzung dieses Programms entstehen. Vor dem Einsatz auf wichtigen
-Ordnern wird empfohlen, eine eigene Sicherung anzulegen.
+die Nutzung dieses Programms entstehen - soweit gesetzlich zulässig. Nicht
+ausgeschlossen ist insbesondere die Haftung für Vorsatz und grobe
+Fahrlässigkeit sowie für Schäden an Leben, Körper oder Gesundheit; zwingende
+gesetzliche Haftung bleibt in jedem Fall unberührt. Vor dem Einsatz auf
+wichtigen Ordnern wird trotzdem empfohlen, eine eigene Sicherung anzulegen.
 
 ## Hinweis zu externen Diensten
 

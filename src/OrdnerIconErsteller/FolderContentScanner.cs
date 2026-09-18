@@ -87,7 +87,8 @@ namespace OrdnerIconErsteller
         {
             var relevantEntries = new List<string>();
             bool hasMoreThanListed = false;
-            var imageCandidatePaths = allowReferenceImage ? new List<string>() : null;
+            AiIconService.ReferenceImage? referenceImage = null;
+            string? referenceImagePath = null;
 
             foreach (string path in Directory.EnumerateFileSystemEntries(folderPath))
             {
@@ -104,8 +105,9 @@ namespace OrdnerIconErsteller
                 // 25-Namen-Grenze zunaechst saemtliche Eintraege") - bei sehr
                 // grossen Ordnern wuerde sonst unnoetig eine komplette, ggf. sehr
                 // lange Liste im Speicher aufgebaut, obwohl spaeter ohnehin nur die
-                // ersten 25 Namen in den Prompt uebernommen werden. Das Sammeln der
-                // Bildkandidaten laeuft unabhaengig davon ueber alle Eintraege weiter.
+                // ersten 25 Namen in den Prompt uebernommen werden. Die Suche nach
+                // einem Referenzbild laeuft unabhaengig davon ueber alle Eintraege
+                // weiter (bis das erste tatsaechlich gueltige Bild gefunden ist).
                 if (relevantEntries.Count < MaxListedFileNames)
                 {
                     relevantEntries.Add(isDirectory ? name + "/" : name);
@@ -115,23 +117,20 @@ namespace OrdnerIconErsteller
                     hasMoreThanListed = true;
                 }
 
-                if (imageCandidatePaths is not null && !isDirectory && IsImageFile(name))
-                {
-                    imageCandidatePaths.Add(path);
-                }
-            }
-
-            AiIconService.ReferenceImage? referenceImage = null;
-            string? referenceImagePath = null;
-            if (imageCandidatePaths is not null)
-            {
-                foreach (string candidatePath in imageCandidatePaths)
+                // Pruefbericht v2.7.1, weiterer Fehler 7: vorher wurden ERST alle
+                // Bildpfade des gesamten Ordners gesammelt und danach geladen/geprueft
+                // - bei sehr grossen Bildordnern konnte das unnoetig viel Speicher
+                // belegen. Jetzt wird jeder Kandidat sofort waehrend der Enumeration
+                // geladen/validiert; sobald ein gueltiges Bild gefunden ist, werden
+                // keine weiteren Bildpfade mehr gesammelt oder geladen (die
+                // Namens-Enumeration fuer die 25-Eintraege-/"und weitere"-Logik laeuft
+                // trotzdem unveraendert weiter).
+                if (allowReferenceImage && referenceImage is null && !isDirectory && IsImageFile(name))
                 {
                     try
                     {
-                        referenceImage = AiIconService.LoadReferenceImage(candidatePath);
-                        referenceImagePath = candidatePath;
-                        break;
+                        referenceImage = AiIconService.LoadReferenceImage(path);
+                        referenceImagePath = path;
                     }
                     catch (Exception ex) when (ex is FileNotFoundException or InvalidOperationException or IOException)
                     {

@@ -211,6 +211,11 @@ namespace OrdnerIconErsteller
             _rechtlichesMenu.Items.Add("Datenschutz", null, (_, _) => ShowLegalDocument(LegalDocumentService.Document.Datenschutz));
             _rechtlichesMenu.Items.Add("Lizenz", null, (_, _) => ShowLegalDocument(LegalDocumentService.Document.Lizenz));
             _rechtlichesMenu.Items.Add("Haftungsausschluss", null, (_, _) => ShowLegalDocument(LegalDocumentService.Document.Haftungsausschluss));
+            // Pruefbericht v2.7.1, Freigabeblocker 1: eigener Eintrag fuer die
+            // mitgelieferten .NET-Runtime-Rechtstexte (siehe LegalDocumentService).
+            _rechtlichesMenu.Items.Add(new ToolStripSeparator());
+            _rechtlichesMenu.Items.Add("Drittanbieterhinweise (.NET)", null, (_, _) => ShowLegalDocument(LegalDocumentService.Document.Drittanbieterhinweise));
+            _rechtlichesMenu.Items.Add(".NET-Lizenz", null, (_, _) => ShowLegalDocument(LegalDocumentService.Document.DotNetLizenz));
 
             // Log
             _txtLog.Dock = DockStyle.Fill;
@@ -564,9 +569,12 @@ namespace OrdnerIconErsteller
                         }
                     }
 
-                    Log($"Kein Text eingegeben - Ordnerinhalt wird stattdessen als Grundlage verwendet " +
-                        $"(Zielordner: {targetFolder}" +
-                        (referenceImage is not null ? ", mit Referenzbild aus dem Ordner)." : ")."));
+                    // Pruefbericht v2.7.1, Punkt 3: hier bewusst KEIN Prompt-/Zielordner-Text
+                    // mehr ins Log schreiben (der volle Ersatz-Prompt kann bis zu 25 Datei-/
+                    // Unterordnernamen enthalten) - nur Status, wie es DATENSCHUTZ.md
+                    // ("kurze Statuszeile") tatsaechlich beschreibt.
+                    Log("Kein Text eingegeben - Ordnerinhalt wird stattdessen als Grundlage verwendet" +
+                        (referenceImage is not null ? " (mit Referenzbild aus dem Ordner)." : "."));
                 }
                 else
                 {
@@ -607,7 +615,10 @@ namespace OrdnerIconErsteller
                 // verwendeten Pfad zurueck.
                 string preferredImagePath = BuildUniqueAiIconImagePath(targetFolder);
 
-                Log($"KI-Icon wird erzeugt (Anbieter: {provider}, Prompt: \"{prompt}\", Zielordner: {targetFolder})...");
+                // Pruefbericht v2.7.1, Punkt 3: nur Anbieter und Status protokollieren, nicht
+                // den vollstaendigen Prompt oder den Zielordnerpfad (DATENSCHUTZ.md spricht
+                // bewusst nur von einer "kurzen Statuszeile").
+                Log($"KI-Icon wird erzeugt (Anbieter: {provider})...");
 
                 // AiIconService liefert an dieser Stelle bereits vollstaendig als
                 // gueltiges Bild dekodierte und in ein kanonisches PNG neu

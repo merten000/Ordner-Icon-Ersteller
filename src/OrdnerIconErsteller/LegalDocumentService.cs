@@ -22,18 +22,33 @@ namespace OrdnerIconErsteller
             Datenschutz,
             Lizenz,
             Haftungsausschluss,
+            // Pruefbericht v2.7.1, Freigabeblocker 1: die Anwendung wird als
+            // selbstenthaltene .NET-8-Windows-Anwendung veroeffentlicht und buendelt
+            // dadurch Teile der .NET-Runtime mit aus. Nach dem offiziellen .NET Asset
+            // Licensing Model muss jede .NET-Binaerdistribution (auch der Installer)
+            // deren Lizenz und Drittanbieterhinweise mitfuehren. Beide Dateien liegen
+            // unveraendert im Unterordner "legal\dotnet-runtime" (siehe csproj) und
+            // stammen aus dem tatsaechlich verwendeten Runtime-Paket
+            // Microsoft.NETCore.App.Runtime.win-x64 8.0.31.
+            DotNetLizenz,
+            Drittanbieterhinweise,
         }
 
         private const string LegalFolderName = "legal";
+        private const string DotNetRuntimeSubfolderName = "dotnet-runtime";
 
-        private static string FileNameFor(Document document) => document switch
+        private static string[] RelativeSegmentsFor(Document document) => document switch
         {
-            Document.Impressum => "IMPRESSUM.md",
-            Document.Datenschutz => "DATENSCHUTZ.md",
-            Document.Lizenz => "LIZENZ.md",
-            Document.Haftungsausschluss => "HAFTUNGSAUSSCHLUSS.md",
+            Document.Impressum => new[] { "IMPRESSUM.md" },
+            Document.Datenschutz => new[] { "DATENSCHUTZ.md" },
+            Document.Lizenz => new[] { "LIZENZ.md" },
+            Document.Haftungsausschluss => new[] { "HAFTUNGSAUSSCHLUSS.md" },
+            Document.DotNetLizenz => new[] { DotNetRuntimeSubfolderName, "LICENSE.TXT" },
+            Document.Drittanbieterhinweise => new[] { DotNetRuntimeSubfolderName, "THIRD-PARTY-NOTICES.TXT" },
             _ => throw new ArgumentOutOfRangeException(nameof(document), document, "Unbekanntes Rechts-Dokument."),
         };
+
+        private static string FileNameFor(Document document) => RelativeSegmentsFor(document)[^1];
 
         internal static string TitleFor(Document document) => document switch
         {
@@ -41,6 +56,8 @@ namespace OrdnerIconErsteller
             Document.Datenschutz => "Datenschutzerklärung",
             Document.Lizenz => "Lizenz / Nutzungsbedingungen",
             Document.Haftungsausschluss => "Haftungsausschluss",
+            Document.DotNetLizenz => ".NET-Lizenz (MIT)",
+            Document.Drittanbieterhinweise => "Drittanbieterhinweise (.NET-Runtime)",
             _ => throw new ArgumentOutOfRangeException(nameof(document), document, "Unbekanntes Rechts-Dokument."),
         };
 
@@ -74,7 +91,11 @@ namespace OrdnerIconErsteller
 
         internal static string GetPath(Document document) => GetPath(document, AppContext.BaseDirectory);
 
-        internal static string GetPath(Document document, string baseDirectory) =>
-            Path.Combine(baseDirectory, LegalFolderName, FileNameFor(document));
+        internal static string GetPath(Document document, string baseDirectory)
+        {
+            var segments = new List<string> { baseDirectory, LegalFolderName };
+            segments.AddRange(RelativeSegmentsFor(document));
+            return Path.Combine(segments.ToArray());
+        }
     }
 }

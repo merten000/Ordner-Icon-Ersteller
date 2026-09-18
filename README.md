@@ -1,4 +1,51 @@
-# Ordner-Icon-Ersteller (Version 2.7.1 – komplette Neuentwicklung)
+# Ordner-Icon-Ersteller (Version 2.7.2 – komplette Neuentwicklung)
+
+## ChatGPT-Prüfbericht v2.7.1 behoben: fünf Freigabeblocker + zwei weitere Punkte (v2.7.1 → v2.7.2)
+
+ChatGPT hat Commit `6609cf1` (v2.7.1) geprüft und fünf Freigabeblocker
+sowie zwei weitere Fehler/Verbesserungen gefunden (voller Bericht:
+`Pruefbericht-Ordner-Icon-Ersteller-v2.7.1-6609cf1.md`). Alle fünf
+Blocker sowie Punkt 6 und 7 wurden behoben:
+
+1. **.NET-Lizenz/Drittanbieterhinweise fehlten im Installer.** Als
+   selbstenthaltene .NET-8-Anwendung bündelt das Programm Teile der
+   .NET-Runtime mit aus - nach dem offiziellen .NET Asset Licensing
+   Model müssen deren `LICENSE.TXT` und `THIRD-PARTY-NOTICES.TXT`
+   (Runtime-Version `Microsoft.NETCore.App.Runtime.win-x64 8.0.31`,
+   Originaldateien unverändert übernommen) mitgeliefert werden. Liegen
+   jetzt in `src/OrdnerIconErsteller/legal/dotnet-runtime/`, werden vom
+   Installer mit ausgeliefert und sind im Programm unter "Rechtliches"
+   als eigene Einträge ("Drittanbieterhinweise (.NET)", ".NET-Lizenz")
+   einsehbar (`LegalDocumentService.cs`, neue `Document`-Werte
+   `DotNetLizenz`/`Drittanbieterhinweise`).
+2. **Datenschutzerklärung behauptete fälschlich, API-Schlüssel würden
+   nie an Dritte übertragen** - korrigiert: der Schlüssel wird zur
+   Authentifizierung an den gewählten Anbieter (OpenAI/Google) gesendet,
+   niemals an den Autor (`legal/DATENSCHUTZ.md`).
+3. **Lokales Log zeigte den vollständigen Prompt und Zielordnerpfad**,
+   obwohl die Datenschutzerklärung nur eine kurze Statuszeile erwähnt -
+   das Log zeigt jetzt nur noch Anbieter und Status
+   (`MainForm.cs`, z.B. "KI-Icon wird erzeugt (Anbieter: Google)...").
+4. **Pauschales Dekompilierungsverbot** in `LIZENZ.md` berücksichtigte
+   die zwingende gesetzliche Ausnahme nach § 69e UrhG nicht - jetzt mit
+   "soweit gesetzlich zulässig" versehen.
+5. **Zu weit gefasster Haftungsausschluss** in `HAFTUNGSAUSSCHLUSS.md` -
+   zwingende gesetzliche Haftung (Vorsatz, grobe Fahrlässigkeit, Leben/
+   Körper/Gesundheit) jetzt ausdrücklich ausgenommen.
+6. **Auslieferungstest war wirkungslos**: `ReadText_MitgelieferteDatei­
+   Vorhanden_LiefertNichtLeerenText` sprang bei fehlender Datei per
+   `return` einfach über den Test statt fehlzuschlagen - jetzt mit
+   `Assert.True(File.Exists(...))` (`LegalDocumentServiceTests.cs`).
+7. **FolderContentScanner sammelte bei der Referenzbild-Suche weiterhin
+   alle Bildpfade des ganzen Ordners im Speicher**, bevor sie geprüft
+   wurden - Kandidaten werden jetzt direkt während der Enumeration
+   geladen/validiert; sobald ein gültiges Bild gefunden ist, werden
+   keine weiteren mehr gesammelt (`FolderContentScanner.cs`).
+
+Rechtliche Hinweise bleiben weiterhin Standardtexte ohne anwaltliche
+Prüfung - bei echten rechtlichen Zweifeln (insbesondere vor einer
+öffentlichen Veröffentlichung) sollte ein Fachanwalt für IT-Recht
+hinzugezogen werden.
 
 ## Build-Fehler in den Tests behoben (v2.7.0 → v2.7.1)
 

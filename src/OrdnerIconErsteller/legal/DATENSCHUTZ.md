@@ -9,10 +9,14 @@ Update-Abfragen über das Internet.
 
 ## Was lokal auf deinem Computer gespeichert wird
 
-- **API-Schlüssel** (OpenAI/Google) werden ausschließlich über den
-  Windows-Anmeldeinformations-Manager (Credential Manager) verschlüsselt auf
-  deinem eigenen Rechner gespeichert - niemals in einer Klartext-Datei und
-  niemals an uns oder Dritte übertragen.
+- **API-Schlüssel** (OpenAI/Google) werden lokal im Windows-
+  Anmeldeinformations-Manager (Credential Manager) verschlüsselt auf deinem
+  eigenen Rechner gespeichert und niemals in einer Klartext-Datei sowie
+  niemals an den Autor übermittelt. Bei Nutzung der KI-Funktion wird der
+  Schlüssel ausschließlich zur Authentifizierung direkt an den von dir
+  ausgewählten Anbieter (OpenAI beziehungsweise Google) gesendet - das ist
+  technisch notwendig, damit der Anbieter deine Anfrage überhaupt bearbeiten
+  kann (siehe auch den folgenden Abschnitt).
 - **Die Zustimmung zum Hinweis über Internetübertragung** (siehe unten) wird
   als einfacher Wert unter `HKEY_CURRENT_USER\Software\OrdnerIconErsteller`
   in der Windows-Registrierung gespeichert.
@@ -20,7 +24,9 @@ Update-Abfragen über das Internet.
   gewählten Zielordner gespeichert - wie jedes andere von dir ausgewähltes
   Bild auch.
 
-Keine dieser Angaben verlässt deinen Rechner, außer im folgenden Fall.
+Diese Angaben werden vom Programm nirgendwo sonst hin übertragen, außer im
+folgenden Fall (Nutzung der KI-Funktion, dabei auch der API-Schlüssel selbst
+- siehe oben).
 
 ## Datenübertragung bei "Icon per KI erzeugen"
 
@@ -41,9 +47,11 @@ zusätzlich die Datenschutzerklärung des jeweiligen Anbieters:
 - OpenAI: https://openai.com/policies/privacy-policy
 - Google: https://policies.google.com/privacy
 
-Dieses Programm selbst speichert oder protokolliert die an den Anbieter
-gesendeten Inhalte nicht dauerhaft (nur eine kurze Statuszeile im
-Programm-eigenen, rein lokalen Log-Fenster während der laufenden Sitzung).
+Dieses Programm selbst speichert die an den Anbieter gesendeten Inhalte
+nicht dauerhaft. Im Programm-eigenen, rein lokalen Log-Fenster erscheint
+während der laufenden Sitzung nur eine kurze Statuszeile mit Anbieter und
+Vorgang (z. B. "KI-Icon wird erzeugt (Anbieter: Google)...") - Prompt- und
+Ordnerinformationen erscheinen dort nicht.
 
 ## Deine Kontrolle
 

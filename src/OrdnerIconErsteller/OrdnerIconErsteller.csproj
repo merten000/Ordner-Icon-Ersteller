@@ -12,7 +12,7 @@
          Kann später ergänzt werden: <ApplicationIcon>app.ico</ApplicationIcon> -->
 
     <!-- Versionsinfo -->
-    <Version>2.7.1</Version>
+    <Version>2.7.2</Version>
     <Product>Ordner-Icon-Ersteller</Product>
     <Company>Merten</Company>
     <Copyright>© Merten</Copyright>
@@ -40,6 +40,20 @@
        dieselbe relative Stelle neben die installierte EXE. -->
   <ItemGroup>
     <None Include="legal\*.md">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <!-- Pruefbericht v2.7.1, Freigabeblocker 1: als selbstenthaltene .NET-8-Windows-
+       Anwendung buendelt diese App Teile der .NET-Runtime mit aus. Nach dem
+       offiziellen .NET Asset Licensing Model muss jede .NET-Binaerdistribution
+       (auch der Installer) deren Lizenz und Drittanbieterhinweise mitfuehren. Die
+       beiden Dateien stammen unveraendert aus dem tatsaechlich verwendeten
+       Runtime-Paket Microsoft.NETCore.App.Runtime.win-x64 8.0.31 und werden - wie
+       die eigenen Rechtstexte oben - unveraendert neben die EXE kopiert
+       (Unterordner "legal\dotnet-runtime", siehe LegalDocumentService). -->
+  <ItemGroup>
+    <None Include="legal\dotnet-runtime\*.TXT">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>

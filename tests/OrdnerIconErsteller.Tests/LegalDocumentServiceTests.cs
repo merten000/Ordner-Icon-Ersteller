@@ -46,16 +46,45 @@ namespace OrdnerIconErsteller.Tests
         {
             var document = Enum.Parse<LegalDocumentService.Document>(documentName);
 
-            // Die csproj kopiert legal\*.md per CopyToOutputDirectory neben die Test-DLL
-            // (Testprojekt liegt im selben Repository, referenziert aber das Hauptprojekt
-            // nicht als Content - deshalb hier zusätzlich am Testprojekt-Ausgabeordner
-            // geprüft; falls das dort fehlt, überspringt der Test statt fehlzuschlagen,
-            // um keine False-Positives durch Build-Layout-Unterschiede zu erzeugen).
+            // Pruefbericht v2.7.1, Punkt 6: vorher wurde bei fehlender Datei per "return"
+            // stillschweigend uebersprungen - genau der Fehler, den dieser Test laut Namen
+            // erkennen soll ("liefert nicht leeren Text"), wurde damit als Erfolg gewertet.
+            // Jetzt schlaegt der Test bewusst fehl, wenn die csproj die legal\*.md-Dateien
+            // nicht (mehr) per CopyToOutputDirectory neben die Test-DLL kopiert.
             string path = LegalDocumentService.GetPath(document);
-            if (!File.Exists(path))
-            {
-                return;
-            }
+            Assert.True(File.Exists(path), $"Erwartete mitgelieferte Datei fehlt: {path}");
+
+            string text = LegalDocumentService.ReadText(document);
+            Assert.False(string.IsNullOrWhiteSpace(text));
+        }
+
+        // Pruefbericht v2.7.1/v2.7.2, Freigabeblocker 1: die mitgelieferten .NET-
+        // Runtime-Rechtstexte liegen bewusst in einem eigenen Unterordner
+        // "legal\dotnet-runtime" (nicht direkt in "legal") - eigene Tests dafuer statt
+        // die obigen Theorien zu erweitern, weil hier der unmittelbare Elternordner
+        // "dotnet-runtime" statt "legal" heisst.
+        [Theory]
+        [InlineData("DotNetLizenz", "LICENSE.TXT")]
+        [InlineData("Drittanbieterhinweise", "THIRD-PARTY-NOTICES.TXT")]
+        public void GetPath_DotNetRuntimeDokumente_ZeigenAufDenUnterordnerDotnetRuntime(
+            string documentName, string expectedFileName)
+        {
+            var document = Enum.Parse<LegalDocumentService.Document>(documentName);
+            string path = LegalDocumentService.GetPath(document);
+
+            Assert.Equal(expectedFileName, Path.GetFileName(path));
+            Assert.Equal("dotnet-runtime", Path.GetFileName(Path.GetDirectoryName(path)));
+        }
+
+        [Theory]
+        [InlineData("DotNetLizenz")]
+        [InlineData("Drittanbieterhinweise")]
+        public void ReadText_DotNetRuntimeDokumenteVorhanden_LiefertNichtLeerenText(string documentName)
+        {
+            var document = Enum.Parse<LegalDocumentService.Document>(documentName);
+
+            string path = LegalDocumentService.GetPath(document);
+            Assert.True(File.Exists(path), $"Erwartete mitgelieferte Datei fehlt: {path}");
 
             string text = LegalDocumentService.ReadText(document);
             Assert.False(string.IsNullOrWhiteSpace(text));

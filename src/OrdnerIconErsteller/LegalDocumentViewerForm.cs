@@ -30,6 +30,13 @@ namespace OrdnerIconErsteller
                 Dock = DockStyle.Fill,
                 Font = new Font("Segoe UI", 10f),
                 Text = content.Replace("\n", "\r\n").Replace("\r\r\n", "\r\n"),
+                // Merten-Feedback: eine schreibgeschützte TextBox bekommt unter Windows
+                // sonst automatisch den grauen "deaktiviert"-Hintergrund (SystemColors.Control)
+                // und dadurch wirkt auch der Text blass/duenn. Hier bewusst ein normaler
+                // weisser Hintergrund mit kraeftigem schwarzem Text, obwohl das Feld
+                // weiterhin schreibgeschuetzt bleibt.
+                BackColor = Color.White,
+                ForeColor = Color.Black,
             };
 
             var buttonPanel = new FlowLayoutPanel
