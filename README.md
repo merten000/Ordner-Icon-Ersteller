@@ -1,4 +1,50 @@
-# Ordner-Icon-Ersteller (Version 2.6.0 – komplette Neuentwicklung)
+# Ordner-Icon-Ersteller (Version 2.7.1 – komplette Neuentwicklung)
+
+## Build-Fehler in den Tests behoben (v2.7.0 → v2.7.1)
+
+Merten-Test: `dotnet build` (diesmal für die ganze Projektmappe inkl.
+Tests, nicht nur `src\OrdnerIconErsteller`) schlug mit zwei CS0051-
+Fehlern in `LegalDocumentServiceTests.cs` fehl: "Inkonsistenter
+Zugriff: Parametertyp 'LegalDocumentService.Document' ist weniger
+zugreifbar als Methode...".
+
+Ursache: `LegalDocumentService.Document` ist absichtlich `internal`
+(siehe `LegalDocumentService.cs`) und für das Testprojekt nur über
+`InternalsVisibleTo` sichtbar. Zwei `[Theory]`-Testmethoden nahmen
+diesen internen Enum-Typ aber direkt als Parameter entgegen - das ist
+laut C#-Sprachregel ein Fehler (CS0051), weil die Testmethoden selbst
+`public` sein müssen (das verlangt xUnit zur Testerkennung), eine
+`public`-Methode aber grundsätzlich keinen weniger zugreifbaren
+("internal") Typ in ihrer Signatur haben darf - unabhängig davon, ob
+`InternalsVisibleTo` gesetzt ist. Dieser Fehler bestand vermutlich
+schon länger, ist aber nur aufgefallen, weil vorher meist gezielt nur
+`dotnet build` innerhalb von `src\OrdnerIconErsteller` lief (ohne das
+Testprojekt).
+
+Fix: die beiden betroffenen Testmethoden nehmen den Dokumentnamen jetzt
+als reinen `string` entgegen (z.B. `"Impressum"`) und wandeln ihn erst
+im Testkörper (nicht mehr Teil der öffentlichen Signatur) per
+`Enum.Parse<LegalDocumentService.Document>(...)` um - dort ist die
+Verwendung des internen Typs unproblematisch.
+
+## Installer-Häkchen für die Rechtsklick-Menü-Integration (v2.6.0 → v2.7.0)
+
+Merten hatte früher schon erwähnt, dass er zusätzlich zum Schalter im
+Programm selbst ("Einstellungen") auch beim Installieren direkt ein
+Häkchen dafür haben möchte. Umgesetzt als neue, standardmäßig NICHT
+angehakte Installer-Aufgabe "Ins Explorer-Rechtsklick-Menü integrieren"
+(`installer/OrdnerIconErsteller.iss`, `[Tasks]`).
+
+Ist das Häkchen beim Installieren gesetzt, trägt der Installer denselben
+Registry-Eintrag ein, den auch `ContextMenuService.Register()` im
+Programm selbst setzen würde (gleicher "command"-Wert, der für die
+Erkennung durch `IsRegistered()` entscheidend ist) - die Checkbox unter
+"Einstellungen" zeigt den Eintrag danach beim ersten Programmstart
+automatisch als bereits aktiviert an. Ist das Häkchen NICHT gesetzt,
+fasst der Installer diesen Registry-Zweig beim Installieren gar nicht
+an, genau wie bisher. Beim Deinstallieren wird der Eintrag weiterhin in
+jedem Fall vollständig entfernt, egal ob er per Installer-Häkchen oder
+später im Programm gesetzt wurde.
 
 ## "Einstellungen"/"Rechtliches" als aufklappendes Dropdown-Menü unter dem Knopf (v2.5.0 → v2.6.0)
 

@@ -12,14 +12,25 @@ namespace OrdnerIconErsteller.Tests
     /// </summary>
     public class LegalDocumentServiceTests
     {
+        // WICHTIG: Die Testmethoden-PARAMETER sind hier bewusst "string" statt direkt
+        // LegalDocumentService.Document, obwohl LegalDocumentServiceTests per
+        // InternalsVisibleTo (siehe OrdnerIconErsteller.csproj) den internen Typ
+        // grundsätzlich verwenden darf. Ein "public" [Theory]-Testmethode (von xUnit
+        // zur Testerkennung verlangt) DARF laut C#-Sprachregel trotzdem keinen weniger
+        // zugreifbaren ("internal") Typ in ihrer Signatur haben (Fehler CS0051) - das
+        // gilt unabhängig von InternalsVisibleTo, weil die Methode selbst öffentlich
+        // bleibt. Deshalb wird der Dokumentname als reiner string übergeben und erst
+        // im Testkörper (nicht mehr Teil der Signatur) per Enum.Parse in
+        // LegalDocumentService.Document umgewandelt.
         [Theory]
-        [InlineData(LegalDocumentService.Document.Impressum, "IMPRESSUM.md")]
-        [InlineData(LegalDocumentService.Document.Datenschutz, "DATENSCHUTZ.md")]
-        [InlineData(LegalDocumentService.Document.Lizenz, "LIZENZ.md")]
-        [InlineData(LegalDocumentService.Document.Haftungsausschluss, "HAFTUNGSAUSSCHLUSS.md")]
+        [InlineData("Impressum", "IMPRESSUM.md")]
+        [InlineData("Datenschutz", "DATENSCHUTZ.md")]
+        [InlineData("Lizenz", "LIZENZ.md")]
+        [InlineData("Haftungsausschluss", "HAFTUNGSAUSSCHLUSS.md")]
         public void GetPath_ZeigtAufDenGleichnamigenUnterordnerLegalNebenDerExe(
-            LegalDocumentService.Document document, string expectedFileName)
+            string documentName, string expectedFileName)
         {
+            var document = Enum.Parse<LegalDocumentService.Document>(documentName);
             string path = LegalDocumentService.GetPath(document);
 
             Assert.Equal(expectedFileName, Path.GetFileName(path));
@@ -27,12 +38,14 @@ namespace OrdnerIconErsteller.Tests
         }
 
         [Theory]
-        [InlineData(LegalDocumentService.Document.Impressum)]
-        [InlineData(LegalDocumentService.Document.Datenschutz)]
-        [InlineData(LegalDocumentService.Document.Lizenz)]
-        [InlineData(LegalDocumentService.Document.Haftungsausschluss)]
-        public void ReadText_MitgelieferteDateiVorhanden_LiefertNichtLeerenText(LegalDocumentService.Document document)
+        [InlineData("Impressum")]
+        [InlineData("Datenschutz")]
+        [InlineData("Lizenz")]
+        [InlineData("Haftungsausschluss")]
+        public void ReadText_MitgelieferteDateiVorhanden_LiefertNichtLeerenText(string documentName)
         {
+            var document = Enum.Parse<LegalDocumentService.Document>(documentName);
+
             // Die csproj kopiert legal\*.md per CopyToOutputDirectory neben die Test-DLL
             // (Testprojekt liegt im selben Repository, referenziert aber das Hauptprojekt
             // nicht als Content - deshalb hier zusätzlich am Testprojekt-Ausgabeordner

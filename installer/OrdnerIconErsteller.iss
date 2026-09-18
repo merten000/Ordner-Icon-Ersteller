@@ -30,13 +30,23 @@
 ;    zu ersetzen.
 ;
 ; 4. Der Explorer-Rechtsklick-Menue-Eintrag (HKCU\Software\Classes\Directory\
-;    shell\OrdnerIconErsteller) wird vom Programm selbst gesetzt, wenn der
-;    Benutzer im Programm auf "Ins Rechtsklick-Menue integrieren" klickt -
-;    NICHT automatisch bei der Installation. Der Installer fasst diesen
-;    Registry-Zweig beim Installieren/Aktualisieren deshalb nicht an (siehe
-;    "dontcreatekey" unten). Beim DEINSTALLIEREN wird er aber vollstaendig
-;    entfernt (Flags: uninsdeletekey), damit kein toter Menue-Eintrag auf
-;    eine geloeschte EXE zeigt.
+;    shell\OrdnerIconErsteller) wird normalerweise vom Programm selbst
+;    gesetzt, wenn der Benutzer im Programm unter "Einstellungen" auf "Ins
+;    Rechtsklick-Menue integrieren" klickt. Seit Merten-Feedback ("Installer-
+;    Haekchen zusaetzlich zum Programm-Schalter") gibt es ZUSAETZLICH die
+;    Installer-Aufgabe "contextmenu" (siehe [Tasks]/[Registry] unten): ist sie
+;    beim Installieren angehakt, traegt der Installer denselben Eintrag direkt
+;    ein - mit exakt denselben Registry-Werten, die auch ContextMenuService.
+;    Register() im Programm setzen wuerde, damit IsRegistered() danach den
+;    Eintrag korrekt erkennt und die Checkbox in "Einstellungen" beim naechsten
+;    Programmstart automatisch als aktiviert anzeigt. Ist die Aufgabe NICHT
+;    angehakt, fasst der Installer diesen Registry-Zweig beim Installieren gar
+;    nicht an (die separate, davon unabhaengige "dontcreatekey"-Zeile unten
+;    dient ausschliesslich der Deinstallations-Aufraeumung). Beim
+;    DEINSTALLIEREN wird der Eintrag in jedem Fall vollstaendig entfernt
+;    (Flags: uninsdeletekey), egal ob er beim Installieren per Haekchen oder
+;    spaeter im Programm selbst gesetzt wurde - damit kein toter Menue-Eintrag
+;    auf eine geloeschte EXE zeigt.
 ;
 ; 5. Die eingebundene EXE wird ausschliesslich mit "dotnet publish -r win-x64"
 ;    erzeugt (siehe PublishDir unten) - sie ist eine reine x64-Anwendung.
@@ -45,7 +55,7 @@
 ;    laufen wuerde (z.B. reines 32-Bit-Windows).
 
 #define MyAppName "Ordner-Icon-Ersteller"
-#define MyAppVersion "2.6.0"
+#define MyAppVersion "2.7.1"
 #define MyAppPublisher "Merten"
 #define MyAppExeName "OrdnerIconErsteller.exe"
 
@@ -85,6 +95,11 @@ Name: "german"; MessagesFile: "compiler:Languages\German.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "Zusaetzlich ein Symbol auf dem Desktop anlegen"; GroupDescription: "Zusaetzliche Symbole:"; Flags: unchecked
+; Standardmaessig NICHT angehakt (Flags: unchecked) - der Benutzer entscheidet
+; bewusst, ob der Explorer-Eintrag gesetzt wird. Kann jederzeit auch spaeter
+; im Programm selbst unter "Einstellungen" ein-/ausgeschaltet werden, siehe
+; Hinweis 4 oben.
+Name: "contextmenu"; Description: "Ins Explorer-Rechtsklick-Menue integrieren (kann spaeter im Programm unter ""Einstellungen"" jederzeit ein-/ausgeschaltet werden)"; GroupDescription: "Zusaetzliche Optionen:"; Flags: unchecked
 
 [Files]
 Source: "{#PublishDir}\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
@@ -112,3 +127,18 @@ Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChang
 ; beim Installieren; "uninsdeletekey" entfernt den kompletten, ausschliesslich
 ; programmeigenen Unterschluessel samt "command"-Eintrag beim Deinstallieren.
 Root: HKCU; Subkey: "Software\Classes\Directory\shell\OrdnerIconErsteller"; Flags: uninsdeletekey dontcreatekey
+
+; Nur aktiv, wenn beim Installieren die Aufgabe "contextmenu" angehakt wurde
+; (siehe [Tasks] oben). Bildet dieselben Registry-Werte nach, die
+; ContextMenuService.Register() im Programm selbst setzen wuerde - siehe
+; Hinweis 4 oben. "{app}\{#MyAppExeName}" ist zur Installationszeit bereits
+; der endgueltige, feste Pfad der EXE (kein Platzhalter mehr wie im Programm-
+; Code, wo der Pfad erst zur Laufzeit ermittelt wird). Fuer IsRegistered() im
+; Programm ist ausschliesslich der "command"-Wert entscheidend (siehe dortiger
+; Vergleich) - der reine Anzeigetext unten ("Ordner-Icon aendern...", bewusst
+; ohne Umlaut, da diese Datei komplett in ASCII gehalten ist wie der Rest des
+; Skripts) hat darauf keinen Einfluss und weicht deshalb unschaedlich vom
+; Programm-Text ("Ordner-Icon ändern...") nur in der Schreibweise ab.
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\OrdnerIconErsteller"; ValueType: string; ValueName: ""; ValueData: "Ordner-Icon aendern..."; Tasks: contextmenu
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\OrdnerIconErsteller"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#MyAppExeName}"; Tasks: contextmenu
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\OrdnerIconErsteller\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""; Tasks: contextmenu
