@@ -117,10 +117,22 @@ namespace OrdnerIconErsteller
                 }
 
                 bool folderHadReadOnly = (new DirectoryInfo(folderPath).Attributes & FileAttributes.ReadOnly) != 0;
+                // Pruefbericht v2.7.4 (ChatGPT-Gegenpruefung zu Commit 7a37a28),
+                // Freigabeblocker 1: getrennt je Pfad festhalten, ob GENAU DIESER Aufruf
+                // die Sicherung tatsaechlich selbst angelegt hat. Vorher loeschte der
+                // catch-Block unten beide Sicherungspfade pauschal - dadurch haette eine
+                // zwischen Vorpruefung und Sicherung (TOCTOU) neu aufgetauchte fremde
+                // Sicherungsdatei ebenfalls geloescht werden koennen, sobald der jeweils
+                // andere Pfad fehlschlug. Jetzt wird im Fehlerfall ausschliesslich das
+                // geloescht, was dieser Aufruf nachweislich selbst erzeugt hat.
+                bool iniBackupCreatedThisCall = false;
+                bool icoBackupCreatedThisCall = false;
                 try
                 {
                     bool iniHasBackup = BackupIfExists(desktopIniPath, iniBackupPath, out int iniAttributes);
+                    iniBackupCreatedThisCall = iniHasBackup;
                     bool icoHasBackup = BackupIfExists(icoPath, icoBackupPath, out int icoAttributes);
+                    icoBackupCreatedThisCall = icoHasBackup;
 
                     WriteMarker(markerPath, new BackupState
                     {
@@ -138,9 +150,11 @@ namespace OrdnerIconErsteller
                     // Originaldatei nie an, bevor die Sicherungskopie an ihrem
                     // endgültigen Platz liegt - deshalb genügt es hier, eventuell
                     // schon angelegte (unvollständige) Sicherungsdateien wieder zu
-                    // entfernen, damit kein halbfertiger Zustand zurückbleibt.
-                    TryDelete(iniBackupPath);
-                    TryDelete(icoBackupPath);
+                    // entfernen, damit kein halbfertiger Zustand zurückbleibt. Nur
+                    // Pfade loeschen, die dieser Aufruf selbst erzeugt hat (siehe
+                    // Kommentar oben) - niemals blind beide.
+                    if (iniBackupCreatedThisCall) { TryDelete(iniBackupPath); }
+                    if (icoBackupCreatedThisCall) { TryDelete(icoBackupPath); }
                     TryDelete(markerPath);
                     throw;
                 }
@@ -879,15 +893,20 @@ namespace OrdnerIconErsteller
                 File.Copy(sourcePath, tempBackup, overwrite: false);
                 File.SetAttributes(tempBackup, FileAttributes.Normal);
 
-                if (File.Exists(finalBackupPath))
-                {
-                    ClearAttributesIfExists(finalBackupPath);
-                    File.Delete(finalBackupPath);
-                }
-
-                // Letzter Schritt ist ein Umbenennen (kein Copy) - das ist auf demselben
-                // Volume praktisch unteilbar.
-                File.Move(tempBackup, finalBackupPath);
+                // Pruefbericht v2.7.4 (ChatGPT-Gegenpruefung zu Commit 7a37a28),
+                // Freigabeblocker 1: die vorherige Fassung loeschte eine an
+                // finalBackupPath inzwischen vorhandene Datei hier ausdruecklich, bevor
+                // die neue Sicherung an ihre Stelle verschoben wurde. Zwischen der
+                // Vorpruefung in SetFolderIconLocked (File.Exists) und diesem Aufruf
+                // liegt ein - wenn auch sehr kurzes - Zeitfenster (TOCTOU), in dem
+                // theoretisch eine fremde Sicherungsdatei neu dort auftauchen konnte;
+                // die alte Fassung haette sie trotzdem geloescht/ersetzt. Jetzt wird
+                // finalBackupPath an dieser Stelle NIE geloescht oder ueberschrieben:
+                // File.Move mit overwrite:false wirft stattdessen, wenn dort inzwischen
+                // etwas liegt - SetFolderIconLocked bricht dann komplett ab und loescht
+                // (siehe dortige *CreatedThisCall-Flags) ausschliesslich Sicherungen,
+                // die nachweislich in genau diesem Aufruf selbst angelegt wurden.
+                File.Move(tempBackup, finalBackupPath, overwrite: false);
                 File.SetAttributes(finalBackupPath, FileAttributes.Hidden | FileAttributes.System);
                 return true;
             }

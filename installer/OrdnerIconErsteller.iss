@@ -55,7 +55,7 @@
 ;    laufen wuerde (z.B. reines 32-Bit-Windows).
 
 #define MyAppName "Ordner-Icon-Ersteller"
-#define MyAppVersion "2.7.3"
+#define MyAppVersion "2.7.4"
 #define MyAppPublisher "Merten"
 #define MyAppExeName "OrdnerIconErsteller.exe"
 
@@ -142,7 +142,13 @@ Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChang
 ; sichtbares Fenster (runhidden) und ohne cmd.exe/powershell.exe - siehe Program.cs,
 ; RunUninstallCleanup(). "waituntilterminated" stellt sicher, dass die Aufraeumung
 ; abgeschlossen ist, bevor die EXE gleich danach geloescht wird.
-Filename: "{app}\{#MyAppExeName}"; Parameters: "--uninstall-cleanup"; Flags: runhidden waituntilterminated; RunOnceId: "OrdnerIconErstellerUninstallCleanup"
+; Pruefbericht v2.7.4 (ChatGPT-Gegenpruefung zu Commit 7a37a28), weiterer Punkt 1:
+; "skipifdoesntexist" ergaenzt - ohne dieses Flag wuerde Inno Setup eine Warnung
+; anzeigen, falls die EXE zum Zeitpunkt der Deinstallation bereits fehlt (z.B. durch
+; einen Virenscanner in Quarantaene verschoben oder manuell geloescht). Die
+; eigentliche Deinstallation (Entfernen der uebrigen Dateien) darf dadurch nicht
+; verhindert werden.
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--uninstall-cleanup"; Flags: runhidden waituntilterminated skipifdoesntexist; RunOnceId: "OrdnerIconErstellerUninstallCleanup"
 
 [Registry]
 ; Siehe Hinweis 4 oben: soll nur beim Deinstallieren wirksam sein (Loeschung),

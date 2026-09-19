@@ -1,10 +1,10 @@
-# Ordner-Icon-Ersteller (Version 2.7.3)
+# Ordner-Icon-Ersteller (Version 2.7.4)
 
 Danke, dass du dieses Programm ausprobierst!
 
 ## Installation
 
-1. Doppelklick auf `OrdnerIconErsteller-Setup-2.7.3.exe`.
+1. Doppelklick auf `OrdnerIconErsteller-Setup-2.7.4.exe`.
 2. Der Installer installiert das Programm nur für dein eigenes Benutzerkonto
    (keine Administratorrechte nötig, keine UAC-Abfrage).
 3. Nach der Installation findest du "Ordner-Icon-Ersteller" im Startmenü.

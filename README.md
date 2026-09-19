@@ -1,4 +1,50 @@
-# Ordner-Icon-Ersteller (Version 2.7.3 – komplette Neuentwicklung)
+# Ordner-Icon-Ersteller (Version 2.7.4 – komplette Neuentwicklung)
+
+## ChatGPT-Gegenprüfung v2.7.3 (Gesamtdurchlauf): zwei Freigabeblocker + zwei weitere Punkte behoben (v2.7.3 → v2.7.4)
+
+ChatGPT hat Commit `fa2cc8a` (v2.7.3) im ersten kompletten Gesamtdurchlauf
+geprüft und dabei 3 Freigabeblocker sowie 2 weitere Punkte gefunden. Alle
+5 Punkte wurden adressiert; die anschließende Gegenprüfung von Commit
+`7a37a28` bestätigte 3 davon als vollständig behoben und fand bei einem
+vierten Punkt (Sicherungslogik) noch eine Lücke sowie eine vergessene
+Versionsnummer:
+
+1. **Native Laufzeit-DLLs fehlten im Installer.** Ein self-contained
+   Single-File-Publish bündelte ohne `IncludeNativeLibrariesForSelfExtract`
+   nur verwaltete DLLs - native Bibliotheken (u.a. `vcruntime140_cor3.dll`,
+   `wpfgfx_cor3.dll`) blieben separat liegen und wurden vom Installer nicht
+   mitinstalliert. Jetzt in `OrdnerIconErsteller.csproj` gesetzt.
+2. **Sicherungsdatei-Kollision beim ersten „Icon setzen" für einen Ordner.**
+   Fehlte der Marker, aber eine Sicherungsdatei mit reserviertem Namen
+   existierte bereits, wurde sie bisher überschrieben statt geschützt zu
+   werden. Zunächst per Vorprüfung in `SetFolderIconLocked` behoben; die
+   Gegenprüfung zu `7a37a28` fand darin noch ein sehr kurzes Zeitfenster
+   (TOCTOU) zwischen Prüfung und tatsächlicher Sicherung - `BackupIfExists`
+   verschiebt die Sicherung jetzt ausschließlich mit `overwrite:false`
+   (wirft statt zu überschreiben) und der Fehlerpfad löscht nur noch
+   Sicherungen, die dieser Aufruf selbst nachweislich angelegt hat
+   (`FolderIconService.cs`).
+3. **Mehrere Log-Meldungen zeigten weiterhin volle Pfade oder
+   ungefilterte Ausnahmetexte** (Startordner, manuelles Setzen/Entfernen,
+   Ordnerscan- und KI-Erzeugungs-Ausnahme in `MainForm.cs`, Google-Textantwort
+   in `AiIconService.cs`) - entgegen der Datenschutzerklärung. Bereinigt.
+4. **Ein Credential-Manager-Fehler beim Start konnte das Hauptfenster
+   abstürzen lassen.** `RefreshAiKeyField()` nutzt jetzt die nichtwerfenden
+   `TryHasOpenAiKey`/`TryHasGoogleKey` aus `ApiKeyStore.cs` statt der
+   werfenden `KeyExists`-Methode.
+5. **Deinstallation ließ API-Schlüssel und Zustimmung zurück.** Ein neuer
+   `--uninstall-cleanup`-Aufruf (`Program.cs`, ohne sichtbares Fenster) löscht
+   jetzt vor dem Entfernen der Dateien die Credential-Manager-Einträge sowie
+   den Zustimmungs-Registrywert (`installer/OrdnerIconErsteller.iss`,
+   `[UninstallRun]`); ergänzt um `skipifdoesntexist`, damit eine fehlende
+   EXE (z.B. durch Virenscanner-Quarantäne) die Deinstallation nicht behindert.
+6. **`publish.bat` übernahm die neuen `release-extras` nicht** und lief bei
+   einem Fehler scheinbar erfolgreich weiter. Kopiert die Dateien jetzt nach
+   dem Publish automatisch mit und beendet sich bei einem Fehler mit
+   Fehlercode.
+7. **Versionsnummer war in `csproj`/Installer/README nicht mit angehoben
+   worden**, obwohl der Commit bereits als 2.7.4 geführt wurde - jetzt an
+   allen Stellen synchron auf 2.7.4 gesetzt.
 
 ## ChatGPT-Gegenprüfung v2.7.2: letzter Freigabeblocker + zwei kleinere Punkte behoben (v2.7.2 → v2.7.3)
 
