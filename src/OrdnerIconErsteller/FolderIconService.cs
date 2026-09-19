@@ -127,6 +127,13 @@ namespace OrdnerIconErsteller
                 // geloescht, was dieser Aufruf nachweislich selbst erzeugt hat.
                 bool iniBackupCreatedThisCall = false;
                 bool icoBackupCreatedThisCall = false;
+                // Pruefbericht v2.7.4 (ChatGPT-Gegenpruefung zu Commit 85d1912), weitere
+                // Robustheitsluecke: WriteMarker() konnte bisher eine unerwartet
+                // aufgetauchte fremde Statusdatei ueberschreiben (siehe dortiger
+                // Kommentar). Deshalb hier - genau wie bei den Sicherungen oben -
+                // separat festhalten, ob DIESER Aufruf den Marker tatsaechlich selbst
+                // angelegt hat, statt ihn im Fehlerpfad pauschal zu loeschen.
+                bool markerCreatedThisCall = false;
                 try
                 {
                     bool iniHasBackup = BackupIfExists(desktopIniPath, iniBackupPath, out int iniAttributes);
@@ -142,6 +149,7 @@ namespace OrdnerIconErsteller
                         IconHasBackup = icoHasBackup,
                         IconAttributes = icoAttributes,
                     });
+                    markerCreatedThisCall = true;
                     createdBackupsThisCall = true;
                 }
                 catch
@@ -152,10 +160,11 @@ namespace OrdnerIconErsteller
                     // schon angelegte (unvollständige) Sicherungsdateien wieder zu
                     // entfernen, damit kein halbfertiger Zustand zurückbleibt. Nur
                     // Pfade loeschen, die dieser Aufruf selbst erzeugt hat (siehe
-                    // Kommentar oben) - niemals blind beide.
+                    // Kommentar oben) - niemals blind beide, und den Marker nur, wenn
+                    // WriteMarker ihn selbst nachweislich angelegt hat.
                     if (iniBackupCreatedThisCall) { TryDelete(iniBackupPath); }
                     if (icoBackupCreatedThisCall) { TryDelete(icoBackupPath); }
-                    TryDelete(markerPath);
+                    if (markerCreatedThisCall) { TryDelete(markerPath); }
                     throw;
                 }
             }
@@ -906,8 +915,19 @@ namespace OrdnerIconErsteller
                 // etwas liegt - SetFolderIconLocked bricht dann komplett ab und loescht
                 // (siehe dortige *CreatedThisCall-Flags) ausschliesslich Sicherungen,
                 // die nachweislich in genau diesem Aufruf selbst angelegt wurden.
+                //
+                // Pruefbericht v2.7.4 (ChatGPT-Gegenpruefung zu Commit 85d1912), weitere
+                // Robustheitsluecke: die vorherige Fassung setzte Hidden/System ERST NACH
+                // dem erfolgreichen Move. Schlug nur dieses SetAttributes fehl, lag am
+                // Zielpfad bereits eine von DIESEM Aufruf erzeugte Sicherung, aber die
+                // Methode hatte noch nicht "true" zurueckgegeben - der Aufrufer konnte das
+                // *CreatedThisCall-Flag daher nie setzen und raeumte die Datei im
+                // Fehlerpfad nicht mehr auf (verwaiste Sicherung). Die Attribute werden
+                // jetzt bereits auf der TEMPORAEREN Datei gesetzt, bevor ueberhaupt
+                // verschoben wird - File.Move ist danach der letzte Schritt, und sobald er
+                // zurueckkehrt, ist nichts mehr offen, das separat fehlschlagen koennte.
+                File.SetAttributes(tempBackup, FileAttributes.Hidden | FileAttributes.System);
                 File.Move(tempBackup, finalBackupPath, overwrite: false);
-                File.SetAttributes(finalBackupPath, FileAttributes.Hidden | FileAttributes.System);
                 return true;
             }
             finally
@@ -930,13 +950,21 @@ namespace OrdnerIconErsteller
             File.WriteAllText(tempMarker, content, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
             try
             {
-                if (File.Exists(markerPath))
-                {
-                    ClearAttributesIfExists(markerPath);
-                    File.Delete(markerPath);
-                }
-                File.Move(tempMarker, markerPath);
-                File.SetAttributes(markerPath, FileAttributes.Hidden | FileAttributes.System);
+                // Pruefbericht v2.7.4 (ChatGPT-Gegenpruefung zu Commit 85d1912), weitere
+                // Robustheitsluecke: analog zu BackupIfExists durfte diese Methode bisher
+                // eine an markerPath inzwischen vorhandene Datei loeschen und ueberschreiben
+                // - obwohl SetFolderIconLocked vorher bereits per markerExistedBefore
+                // geprueft hatte, dass keine gueltige Statusdatei existiert. Zwischen dieser
+                // Pruefung und dem eigentlichen Schreiben hier liegt ein (kurzes)
+                // Zeitfenster; taucht die Statusdatei in dieser Zeit unerwartet auf (z.B.
+                // durch einen parallelen Vorgang), haette die alte Fassung sie trotzdem
+                // geloescht/ersetzt. Attribute werden jetzt vorab auf der TEMPORAEREN Datei
+                // gesetzt, und File.Move mit overwrite:false wirft, statt zu ueberschreiben,
+                // falls markerPath inzwischen existiert - der Aufrufer bricht dann ab und
+                // loescht (ueber das dortige markerCreatedThisCall-Flag) nur eine
+                // Statusdatei, die dieser Aufruf selbst tatsaechlich angelegt hat.
+                File.SetAttributes(tempMarker, FileAttributes.Hidden | FileAttributes.System);
+                File.Move(tempMarker, markerPath, overwrite: false);
             }
             finally
             {
