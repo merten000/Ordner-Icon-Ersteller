@@ -62,6 +62,16 @@
 ; Quelle der fertig veroeffentlichten (self-contained, single-file) EXE.
 ; Muss vorher erzeugt werden mit (aus src\OrdnerIconErsteller):
 ;   dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o .\publish
+;
+; Pruefbericht v2.7.3 (Gesamtdurchlauf), Freigabeblocker 1: das csproj setzt seit
+; dieser Version <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract> -
+; dadurch landen auch die nativen Laufzeit-DLLs (D3DCompiler_47_cor3.dll,
+; PenImc_cor3.dll, PresentationNative_cor3.dll, vcruntime140_cor3.dll,
+; wpfgfx_cor3.dll) IN der einen EXE-Datei statt als separate Dateien daneben.
+; Deshalb reicht es unten unter [Files] weiterhin aus, nur {#MyAppExeName} zu
+; kopieren - das ist bewusst so und keine versehentliche Luecke. Vor jeder neuen
+; Installer-Version trotzdem einmal den frischen publish-Ordner mit dem
+; Installer-Inhalt vergleichen, falls sich das .NET-SDK-Verhalten je aendert.
 #define PublishDir "..\src\OrdnerIconErsteller\publish"
 
 [Setup]
@@ -123,6 +133,16 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+
+[UninstallRun]
+; Pruefbericht v2.7.3 (Gesamtdurchlauf), kleinerer Punkt 5: ohne diesen Schritt blieben
+; die im Windows-Anmeldeinformations-Manager gespeicherten API-Schluessel (OpenAI/
+; Google) sowie der Zustimmungs-Registrywert nach einer Deinstallation zurueck. Laeuft
+; VOR dem Entfernen der Dateien ([UninstallRun] wird vor [Files] abgearbeitet), ohne
+; sichtbares Fenster (runhidden) und ohne cmd.exe/powershell.exe - siehe Program.cs,
+; RunUninstallCleanup(). "waituntilterminated" stellt sicher, dass die Aufraeumung
+; abgeschlossen ist, bevor die EXE gleich danach geloescht wird.
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--uninstall-cleanup"; Flags: runhidden waituntilterminated; RunOnceId: "OrdnerIconErstellerUninstallCleanup"
 
 [Registry]
 ; Siehe Hinweis 4 oben: soll nur beim Deinstallieren wirksam sein (Loeschung),

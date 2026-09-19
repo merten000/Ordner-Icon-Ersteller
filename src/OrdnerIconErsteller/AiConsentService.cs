@@ -121,5 +121,18 @@ namespace OrdnerIconErsteller
                     "Die Zustimmung konnte deshalb nicht gespeichert werden.");
             key.SetValue(ConsentValueName, CurrentConsentVersion);
         }
+
+        /// <summary>
+        /// Entfernt den kompletten Registry-Schlüssel "HKCU\Software\OrdnerIconErsteller"
+        /// (Pruefbericht v2.7.3, Gesamtdurchlauf, kleinerer Punkt 5) - wird ausschließlich
+        /// von Program.RunUninstallCleanup() beim Deinstallieren aufgerufen. Aktuell steht
+        /// darin nur der Zustimmungswert; sollten hier künftig weitere, nicht rein
+        /// zustimmungsbezogene Einstellungen hinzukommen, muss diese Methode entsprechend
+        /// angepasst werden, statt weiterhin den ganzen Zweig zu löschen.
+        /// </summary>
+        internal static void DeleteStoredConsent()
+        {
+            Registry.CurrentUser.DeleteSubKeyTree(SettingsKeyPath, throwOnMissingSubKey: false);
+        }
     }
 }

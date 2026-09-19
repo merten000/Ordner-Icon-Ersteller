@@ -68,7 +68,10 @@ namespace OrdnerIconErsteller
             if (!string.IsNullOrEmpty(startFolder))
             {
                 _txtFolder.Text = startFolder;
-                Log($"Ordner aus Explorer-Kontextmenü übernommen: {startFolder}");
+                // Pruefbericht v2.7.3 (Gesamtdurchlauf), Freigabeblocker 3: kein vollstaendiger
+                // Ordnerpfad mehr im Log (siehe DATENSCHUTZ.md). Der Pfad steht ohnehin bereits
+                // sichtbar im Feld "Ordner" direkt darueber.
+                Log("Ordner aus Explorer-Kontextmenü übernommen.");
             }
         }
 
@@ -317,13 +320,20 @@ namespace OrdnerIconErsteller
             try
             {
                 FolderIconService.SetFolderIcon(_txtFolder.Text, _txtImage.Text);
-                Log($"Icon gesetzt für: {_txtFolder.Text}");
+                // Pruefbericht v2.7.3 (Gesamtdurchlauf), Freigabeblocker 3: kein vollstaendiger
+                // Ordnerpfad mehr im Log (siehe DATENSCHUTZ.md).
+                Log("Icon wurde gesetzt.");
                 MessageBox.Show(this, "Icon wurde gesetzt. Falls der Explorer es nicht sofort anzeigt, Ansicht kurz aktualisieren (F5).",
                     "Fertig", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {
-                Log($"FEHLER beim Setzen des Icons: {ex.Message}");
+                // Pruefbericht v2.7.3 (Gesamtdurchlauf), Freigabeblocker 3: FolderIconService-
+                // Ausnahmen enthalten haeufig den vollstaendigen Ordner-/Dateipfad (siehe z.B.
+                // DirectoryNotFoundException/FileNotFoundException dort) - ex.Message deshalb
+                // nicht mehr ins Log schreiben. Der Dialog unten zeigt die Detailmeldung dem
+                // Benutzer weiterhin direkt an, landet aber nicht im kopierbaren Log-Fenster.
+                Log("FEHLER beim Setzen des Icons (siehe Fehlermeldung im Dialogfenster).");
                 MessageBox.Show(this, $"Fehler beim Setzen des Icons:\n{ex.Message}", "Fehler",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
@@ -341,11 +351,11 @@ namespace OrdnerIconErsteller
             try
             {
                 FolderIconService.RemoveFolderIcon(_txtFolder.Text);
-                Log($"Icon entfernt von: {_txtFolder.Text}");
+                Log("Icon wurde entfernt.");
             }
             catch (Exception ex)
             {
-                Log($"FEHLER beim Entfernen des Icons: {ex.Message}");
+                Log("FEHLER beim Entfernen des Icons (siehe Fehlermeldung im Dialogfenster).");
                 MessageBox.Show(this, $"Fehler beim Entfernen des Icons:\n{ex.Message}", "Fehler",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
@@ -465,11 +475,35 @@ namespace OrdnerIconErsteller
 
         private void RefreshAiKeyField()
         {
-            bool hasKey = IsGoogleSelected ? ApiKeyStore.HasGoogleKey() : ApiKeyStore.HasOpenAiKey();
+            // Pruefbericht v2.7.3 (Gesamtdurchlauf), weiterer Fehler 4: die werfenden
+            // Has...Key()-Methoden wurden hier bewusst durch die nichtwerfenden Try...-
+            // Varianten ersetzt, da dieser Aufruf auch direkt aus dem MainForm-Konstruktor
+            // erfolgt - ein nicht erreichbarer Credential Manager (z.B. per Richtlinie
+            // gesperrt) durfte den Programmstart nicht mehr ungefangen abbrechen lassen.
+            bool couldCheck;
+            bool hasKey;
+            if (IsGoogleSelected)
+            {
+                couldCheck = ApiKeyStore.TryHasGoogleKey(out hasKey);
+            }
+            else
+            {
+                couldCheck = ApiKeyStore.TryHasOpenAiKey(out hasKey);
+            }
+
+            string providerLabel = IsGoogleSelected ? "Google" : "OpenAI";
+            if (!couldCheck)
+            {
+                _txtAiKey.Text = string.Empty;
+                _lblAiKeyStatus.Text = $"Status ({providerLabel}): Schlüsselstatus konnte nicht gelesen werden " +
+                    "(Windows-Anmeldeinformations-Manager nicht erreichbar).";
+                return;
+            }
+
             _txtAiKey.Text = hasKey ? PasswordPlaceholder : string.Empty;
             _lblAiKeyStatus.Text = hasKey
-                ? $"Status ({(IsGoogleSelected ? "Google" : "OpenAI")}): Schlüssel hinterlegt"
-                : $"Status ({(IsGoogleSelected ? "Google" : "OpenAI")}): kein Schlüssel hinterlegt";
+                ? $"Status ({providerLabel}): Schlüssel hinterlegt"
+                : $"Status ({providerLabel}): kein Schlüssel hinterlegt";
         }
 
         private async Task GenerateAiIconAsync()
@@ -540,7 +574,10 @@ namespace OrdnerIconErsteller
                     }
                     catch (Exception ex)
                     {
-                        Log($"FEHLER beim Durchsuchen des Ordners für \"Icon ohne Text\": {ex.Message}");
+                        // Pruefbericht v2.7.3 (Gesamtdurchlauf), Freigabeblocker 3: ex.Message kann
+                        // hier Datei-/Ordnernamen aus dem gescannten Ordner enthalten - nicht mehr
+                        // ins Log schreiben (siehe DATENSCHUTZ.md).
+                        Log("FEHLER beim Durchsuchen des Ordners für \"Icon ohne Text\" (siehe Fehlermeldung im Dialogfenster).");
                         MessageBox.Show(this, $"Der Ordner konnte nicht durchsucht werden:\n{ex.Message}", "Fehler",
                             MessageBoxButtons.OK, MessageBoxIcon.Error);
                         return;
@@ -655,7 +692,10 @@ namespace OrdnerIconErsteller
             }
             catch (Exception ex)
             {
-                Log($"FEHLER bei der KI-Icon-Erzeugung: {ex.Message}");
+                // Pruefbericht v2.7.3 (Gesamtdurchlauf), Freigabeblocker 3: ex.Message kann hier
+                // die rohe Antwort des KI-Anbieters oder Datei-/Ordnernamen enthalten - nicht mehr
+                // ins Log schreiben (siehe DATENSCHUTZ.md und AiIconService).
+                Log("FEHLER bei der KI-Icon-Erzeugung (siehe Fehlermeldung im Dialogfenster).");
                 MessageBox.Show(this, $"Fehler bei der KI-Icon-Erzeugung:\n{ex.Message}", "Fehler",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
             }

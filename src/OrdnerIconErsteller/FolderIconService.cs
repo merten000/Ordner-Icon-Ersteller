@@ -95,6 +95,27 @@ namespace OrdnerIconErsteller
             // mit unserer eigenen, zwischenzeitlich gesetzten Version überschreiben.
             if (!markerExistedBefore)
             {
+                // Pruefbericht v2.7.3 (Gesamtdurchlauf), Freigabeblocker 2: ohne diese
+                // Vorpruefung wuerde BackupIfExists() unten eine bereits vorhandene Datei
+                // mit dem reservierten Sicherungsnamen (z.B. desktop.ini.before-
+                // ordnericonersteller.bak) einfach loeschen und durch eine neue Sicherung
+                // ersetzen - reproduzierbar per Regressionstest bestaetigt. So eine Datei
+                // kann der letzte Rest eines fruehher abgebrochenen Wiederherstellungs-
+                // vorgangs sein (z.B. wenn der Marker manuell geloescht oder durch einen
+                // Absturz verloren wurde), waehrend die eigentliche Originaldatei darin
+                // noch unwiederbringlich steckt. Fehlt der Marker, aber einer der
+                // reservierten Namen existiert bereits, wird deshalb NICHTS veraendert -
+                // stattdessen erst hier abgebrochen, bevor ueberhaupt etwas angefasst wird.
+                if (File.Exists(iniBackupPath) || File.Exists(icoBackupPath))
+                {
+                    throw new InvalidDataException(
+                        "In diesem Ordner liegt bereits eine Sicherungsdatei von Ordner-Icon-Ersteller " +
+                        "(desktop.ini" + BackupSuffix + " bzw. Icon.ico" + BackupSuffix + "), obwohl keine " +
+                        "gültige Statusdatei für diesen Ordner gefunden wurde. Das kann der Rest eines " +
+                        "früher abgebrochenen Vorgangs sein. Aus Sicherheitsgründen wird nichts verändert - " +
+                        "bitte den Ordnerinhalt manuell prüfen, bevor das Icon erneut gesetzt wird.");
+                }
+
                 bool folderHadReadOnly = (new DirectoryInfo(folderPath).Attributes & FileAttributes.ReadOnly) != 0;
                 try
                 {

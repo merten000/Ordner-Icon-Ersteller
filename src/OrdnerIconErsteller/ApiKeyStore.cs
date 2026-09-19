@@ -43,6 +43,20 @@ namespace OrdnerIconErsteller
         public static void DeleteOpenAiKey() => DeleteKey(OpenAiTargetName);
         public static void DeleteGoogleKey() => DeleteKey(GoogleTargetName);
 
+        // Pruefbericht v2.7.3 (Gesamtdurchlauf), weiterer Fehler 4: HasOpenAiKey()/
+        // HasGoogleKey() werfen ueber KeyExists() bei JEDEM CredRead-Fehler ausser
+        // "nicht gefunden" eine Exception - ist der Credential Manager z.B. durch
+        // Gruppenrichtlinie gesperrt, einen beschaedigten Eintrag oder eine fehlende
+        // Anmeldesitzung nicht verfuegbar, konnte das den Programmstart (Aufruf aus
+        // dem MainForm-Konstruktor) ungefangen abbrechen lassen. Die TryHas...-Varianten
+        // fangen genau das ab und liefern stattdessen "Status unbekannt" (ok=false)
+        // zurueck, ohne zu werfen - fuer den Konstruktor/RefreshAiKeyField gedacht, wo
+        // ein sauberer Programmstart wichtiger ist als eine hundertprozentig genaue
+        // Anzeige. Speichern/Loeschen (SaveKey/DeleteKey) werfen bewusst weiterhin -
+        // dort soll ein echter Fehler sichtbar bleiben.
+        public static bool TryHasOpenAiKey(out bool hasKey) => TryKeyExists(OpenAiTargetName, out hasKey);
+        public static bool TryHasGoogleKey(out bool hasKey) => TryKeyExists(GoogleTargetName, out hasKey);
+
         // Nur fuer automatisierte Tests: identische Logik wie die oeffentlichen
         // Methoden oben, aber mit einem vom Aufrufer gewaehlten Target-Namen -
         // damit Tests niemals die echten Produkt-Eintraege
@@ -232,6 +246,27 @@ namespace OrdnerIconErsteller
 
             CredFree(credPtr);
             return true;
+        }
+
+        /// <summary>
+        /// Nichtwerfende Variante von KeyExists() (siehe Pruefbericht v2.7.3, weiterer
+        /// Fehler 4). Gibt true zurueck und liefert das Ergebnis in "hasKey", wenn der
+        /// Zustand sicher ermittelt werden konnte; gibt false zurueck (hasKey bleibt
+        /// unbestimmt/false), wenn CredRead aus einem anderen Grund als "nicht gefunden"
+        /// fehlgeschlagen ist (z.B. Credential Manager gesperrt/nicht verfuegbar).
+        /// </summary>
+        private static bool TryKeyExists(string targetName, out bool hasKey)
+        {
+            try
+            {
+                hasKey = KeyExists(targetName);
+                return true;
+            }
+            catch (InvalidOperationException)
+            {
+                hasKey = false;
+                return false;
+            }
         }
 
         /// <summary>
