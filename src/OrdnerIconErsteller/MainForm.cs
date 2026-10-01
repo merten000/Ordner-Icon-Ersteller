@@ -66,6 +66,12 @@ namespace OrdnerIconErsteller
         private Task? _commitTask;
         private bool _closeAfterOperation;
 
+        // Runde 3 (Befund F-008): rein lesende Dateisystemzugriffe der abbrechbaren Phase (Ordner-Scan,
+        // Sicherungs-Diagnose) laufen ueber dieses Gate, damit ein Abbruch/Schliessen auch dann sofort
+        // wirkt, wenn ein einzelner Dateisystemzugriff haengt. Es ist hoechstens eine zurueckgelassene
+        // Arbeit moeglich; eine neue KI-Operation wird abgelehnt, solange sie noch haengt.
+        private readonly AbandonableWorkGate _readGate = new();
+
         public MainForm(string? startFolder)
         {
             Text = "Ordner-Icon-Ersteller";
@@ -430,10 +436,14 @@ namespace OrdnerIconErsteller
         /// beiseite zu legen (umbenennen, NICHT loeschen); sonst wird nur erklaert und
         /// abgebrochen. Es wird nie automatisch geloescht oder geraten.
         /// </summary>
-        private async Task<bool> PreflightOrphanBackupsAsync(string folder)
+        private async Task<bool> PreflightOrphanBackupsAsync(string folder, CancellationToken cancellationToken = default)
         {
-            FolderIconService.OrphanBackupDiagnosis diagnosis =
-                await Task.Run(() => FolderIconService.DiagnoseOrphanBackups(folder));
+            // Die Diagnose liest nur. In der abbrechbaren Phase (KI-Icon) laeuft sie ueber das Gate
+            // (Runde 3, Befund F-008), damit ein haengender Zugriff den Abbruch nicht aufhaelt. Die
+            // manuellen Wege (Committing-Phase, kein Token) bleiben unveraendert.
+            FolderIconService.OrphanBackupDiagnosis diagnosis = cancellationToken.CanBeCanceled
+                ? await _readGate.RunAsync(_ => FolderIconService.DiagnoseOrphanBackups(folder), cancellationToken)
+                : await Task.Run(() => FolderIconService.DiagnoseOrphanBackups(folder));
 
             if (diagnosis.State == FolderIconService.OrphanBackupState.NoProblem)
             {
@@ -648,6 +658,18 @@ namespace OrdnerIconErsteller
             // Runde 2 (Befund F-001): die Phase "abbrechbar" beginnt hier - bis kurz vor dem
             // Dateischritt kann der Benutzer ueber "Abbrechen" (oder beim Schliessen) kontrolliert
             // abbrechen; der Token wird an Ordner-Scan und Netzwerkanfrage durchgereicht.
+            // Runde 3 (Befund F-008): haengt noch ein frueher abgebrochener, rein lesender Zugriff auf
+            // einen Ordner im Hintergrund, wird keine neue Operation gestartet (sonst koennten sich bei
+            // wiederholtem Abbrechen beliebig viele haengende Tasks ansammeln).
+            if (_readGate.HasAbandonedWork)
+            {
+                MessageBox.Show(this,
+                    "Ein früher abgebrochener Zugriff auf einen Ordner hängt noch (das Laufwerk antwortet nicht). " +
+                    "Bitte warten, bis das Laufwerk wieder reagiert, oder das Programm neu starten.",
+                    "Zugriff hängt noch", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
             _aiCts = new CancellationTokenSource();
             CancellationToken cancellationToken = _aiCts.Token;
             BeginOperation(OperationPhase.Cancellable);
@@ -656,7 +678,7 @@ namespace OrdnerIconErsteller
                 // Runde 2 (Befund F-002): uebrig gebliebene Sicherungsdateien eines hart beendeten
                 // frueheren Laufs VOR der (kostenpflichtigen) KI-Anfrage erkennen, nicht erst
                 // danach beim Setzen des Icons.
-                if (!await PreflightOrphanBackupsAsync(targetFolder))
+                if (!await PreflightOrphanBackupsAsync(targetFolder, cancellationToken))
                 {
                     return;
                 }
@@ -686,7 +708,10 @@ namespace OrdnerIconErsteller
                         // synchroner Aufruf hier sonst das Fenster einfrieren lassen. Die
                         // Bedienelemente sind zu diesem Zeitpunkt (siehe oben) bereits gesperrt.
                         bool allowReferenceImage = provider == AiImageProvider.Google;
-                        scan = await Task.Run(() => FolderContentScanner.Scan(targetFolder, allowReferenceImage, cancellationToken), cancellationToken);
+                        // Runde 3 (Befund F-008): ueber das Gate statt Task.Run(..., token) - dessen await wartet
+                        // trotz Abbruch, bis ein haengender Dateisystemzugriff zurueckkehrt.
+                        scan = await _readGate.RunAsync(
+                            token => FolderContentScanner.Scan(targetFolder, allowReferenceImage, token), cancellationToken);
                     }
                     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                     {
