@@ -8,6 +8,7 @@ using System.Net.Http.Headers;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace OrdnerIconErsteller
@@ -243,18 +244,27 @@ namespace OrdnerIconErsteller
         /// <paramref name="referenceImage"/> ist optional und wird nur bei
         /// <see cref="AiImageProvider.Google"/> tatsächlich als Bild-Eingabe verwendet
         /// (siehe <see cref="ReferenceImage"/>).
+        ///
+        /// Runde 2 (Befund F-001): <paramref name="cancellationToken"/> bricht eine laufende
+        /// Anfrage kontrolliert ab (Verbindungsaufbau, Warten auf Antwort, Lesen des
+        /// Antwortkoerpers, auch zwischen dem ersten und einem zweiten Google-Versuch).
+        /// Ein vom Aufrufer angeforderter Abbruch endet mit einer
+        /// <see cref="OperationCanceledException"/>; die bestehenden Zeitueberschreitungs-
+        /// Meldungen bleiben davon unberuehrt.
         /// </summary>
-        public static async Task<byte[]> GenerateIconImageAsync(AiImageProvider provider, string prompt, ReferenceImage? referenceImage = null)
+        public static async Task<byte[]> GenerateIconImageAsync(AiImageProvider provider, string prompt, ReferenceImage? referenceImage = null, CancellationToken cancellationToken = default)
         {
             if (string.IsNullOrWhiteSpace(prompt))
             {
                 throw new ArgumentException("Es wurde kein Text fuer das gewuenschte Icon ermittelt.", nameof(prompt));
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
+
             byte[] imageBytes = provider switch
             {
-                AiImageProvider.OpenAi => await GenerateWithOpenAiAsync(prompt).ConfigureAwait(false),
-                AiImageProvider.Google => await GenerateWithGoogleAsync(prompt, referenceImage).ConfigureAwait(false),
+                AiImageProvider.OpenAi => await GenerateWithOpenAiAsync(prompt, cancellationToken).ConfigureAwait(false),
+                AiImageProvider.Google => await GenerateWithGoogleAsync(prompt, referenceImage, cancellationToken).ConfigureAwait(false),
                 _ => throw new ArgumentOutOfRangeException(nameof(provider), provider, "Unbekannter KI-Anbieter."),
             };
 
@@ -322,7 +332,7 @@ namespace OrdnerIconErsteller
             }
         }
 
-        private static async Task<byte[]> GenerateWithOpenAiAsync(string prompt)
+        private static async Task<byte[]> GenerateWithOpenAiAsync(string prompt, CancellationToken cancellationToken)
         {
             string? apiKey = ApiKeyStore.ReadOpenAiKey();
             if (string.IsNullOrEmpty(apiKey))
@@ -338,9 +348,9 @@ namespace OrdnerIconErsteller
             };
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
 
-            using HttpResponseMessage response = await HttpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead)
+            using HttpResponseMessage response = await HttpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
                 .ConfigureAwait(false);
-            string responseText = await ReadResponseTextWithLimitAsync(response).ConfigureAwait(false);
+            string responseText = await ReadResponseTextWithLimitAsync(response, ResponseBodyReadTimeout, cancellationToken).ConfigureAwait(false);
 
             if (!response.IsSuccessStatusCode)
             {
@@ -409,7 +419,7 @@ namespace OrdnerIconErsteller
             }
         }
 
-        private static async Task<byte[]> GenerateWithGoogleAsync(string prompt, ReferenceImage? referenceImage)
+        private static async Task<byte[]> GenerateWithGoogleAsync(string prompt, ReferenceImage? referenceImage, CancellationToken cancellationToken)
         {
             string? apiKey = ApiKeyStore.ReadGoogleKey();
             if (string.IsNullOrEmpty(apiKey))
@@ -429,17 +439,19 @@ namespace OrdnerIconErsteller
             // antworten. Liefert der erste Versuch trotzdem nur Text, wird EINMAL
             // automatisch mit einer noch deutlicheren Formulierung wiederholt, bevor
             // ein Fehler (inkl. der Text-Antwort des Modells) angezeigt wird.
-            (byte[]? imageBytes, string? textOnlyResponse) = await GenerateWithGoogleOnceAsync(apiKey, BuildGoogleImagePrompt(prompt), referenceImage)
+            (byte[]? imageBytes, string? textOnlyResponse) = await GenerateWithGoogleOnceAsync(apiKey, BuildGoogleImagePrompt(prompt), referenceImage, cancellationToken)
                 .ConfigureAwait(false);
             if (imageBytes is not null)
             {
                 return imageBytes;
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
+
             string retryPrompt = BuildGoogleImagePrompt(prompt) +
                 " This is very important: your entire response must be a single generated image. " +
                 "Do not write any words, do not ask questions, do not explain - respond with the image only.";
-            (imageBytes, string? retryTextOnlyResponse) = await GenerateWithGoogleOnceAsync(apiKey, retryPrompt, referenceImage)
+            (imageBytes, string? retryTextOnlyResponse) = await GenerateWithGoogleOnceAsync(apiKey, retryPrompt, referenceImage, cancellationToken)
                 .ConfigureAwait(false);
             if (imageBytes is not null)
             {
@@ -521,7 +533,7 @@ namespace OrdnerIconErsteller
         /// (Ein "out"-Parameter wäre hier nicht zulässig - async-Methoden dürfen
         /// keine ref/in/out-Parameter haben - deshalb ein Tupel als Rückgabewert.)
         /// </summary>
-        private static async Task<(byte[]? ImageBytes, string? TextOnlyResponse)> GenerateWithGoogleOnceAsync(string apiKey, string effectivePrompt, ReferenceImage? referenceImage)
+        private static async Task<(byte[]? ImageBytes, string? TextOnlyResponse)> GenerateWithGoogleOnceAsync(string apiKey, string effectivePrompt, ReferenceImage? referenceImage, CancellationToken cancellationToken)
         {
             const string url = "https://generativelanguage.googleapis.com/v1/models/gemini-3.1-flash-image:generateContent";
             using var request = new HttpRequestMessage(HttpMethod.Post, url)
@@ -530,9 +542,9 @@ namespace OrdnerIconErsteller
             };
             request.Headers.Add("x-goog-api-key", apiKey);
 
-            using HttpResponseMessage response = await HttpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead)
+            using HttpResponseMessage response = await HttpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
                 .ConfigureAwait(false);
-            string responseText = await ReadResponseTextWithLimitAsync(response).ConfigureAwait(false);
+            string responseText = await ReadResponseTextWithLimitAsync(response, ResponseBodyReadTimeout, cancellationToken).ConfigureAwait(false);
 
             if (!response.IsSuccessStatusCode)
             {
@@ -659,19 +671,15 @@ namespace OrdnerIconErsteller
         /// gemeldeter Body wird sofort abgelehnt; fehlt der Header (z.B. bei
         /// Chunked Transfer Encoding), wird der Stream gestückelt gelesen und beim
         /// Überschreiten der Grenze sofort abgebrochen (Pruefbericht Punkt 5).
+        ///
+        /// Der Timeout ist ein Parameter, damit automatisierte Tests (3. ChatGPT-
+        /// Gegenprüfung von v2.1.2, Regressionstest für den Timeout-Fix) den
+        /// Timeout-Zweig auslösen können, ohne 120 echte Sekunden zu warten; die
+        /// Anwendung übergibt <see cref="ResponseBodyReadTimeout"/>. Runde 2 (F-001):
+        /// <paramref name="cancellationToken"/> erlaubt einen vom Benutzer
+        /// angeforderten Abbruch.
         /// </summary>
-        private static async Task<string> ReadResponseTextWithLimitAsync(HttpResponseMessage response)
-            => await ReadResponseTextWithLimitAsync(response, ResponseBodyReadTimeout).ConfigureAwait(false);
-
-        /// <summary>
-        /// Überladung mit explizitem Timeout-Parameter statt der festen
-        /// <see cref="ResponseBodyReadTimeout"/> - ausschließlich damit automatisierte
-        /// Tests (3. ChatGPT-Gegenprüfung von v2.1.2, fehlender Regressionstest für den
-        /// Timeout-Fix) den Timeout-Zweig auslösen können, ohne 120 echte Sekunden zu
-        /// warten. Die eigentliche Anwendung ruft ausschließlich die Überladung ohne
-        /// Timeout-Parameter oben auf.
-        /// </summary>
-        internal static async Task<string> ReadResponseTextWithLimitAsync(HttpResponseMessage response, TimeSpan timeout)
+        internal static async Task<string> ReadResponseTextWithLimitAsync(HttpResponseMessage response, TimeSpan timeout, CancellationToken cancellationToken = default)
         {
             if (response.Content.Headers.ContentLength is long declaredLength && declaredLength > MaxResponseBytes)
             {
@@ -683,7 +691,11 @@ namespace OrdnerIconErsteller
             // Eigener CancellationToken fuer das Lesen des Bodys - siehe Kommentar bei
             // ResponseBodyReadTimeout. HttpClient.Timeout allein wuerde diesen Teil wegen
             // HttpCompletionOption.ResponseHeadersRead nicht mehr abdecken.
-            using var readTimeoutCts = new CancellationTokenSource(timeout);
+            //
+            // Runde 2 (Befund F-001): zusaetzlich mit dem Abbruch-Token des Aufrufers
+            // verknuepft, damit auch das Lesen des Antwortkoerpers abbrechbar ist.
+            using var readTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            readTimeoutCts.CancelAfter(timeout);
             try
             {
                 await using Stream stream = await response.Content.ReadAsStreamAsync(readTimeoutCts.Token).ConfigureAwait(false);
@@ -705,8 +717,11 @@ namespace OrdnerIconErsteller
 
                 return Encoding.UTF8.GetString(buffer.GetBuffer(), 0, (int)buffer.Length);
             }
-            catch (OperationCanceledException) when (readTimeoutCts.IsCancellationRequested)
+            catch (OperationCanceledException) when (readTimeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
             {
+                // Nur die eigene Zeitueberschreitung wird in die bekannte Meldung
+                // uebersetzt; ein vom Benutzer angeforderter Abbruch wird unveraendert
+                // als OperationCanceledException weitergereicht.
                 throw new InvalidOperationException(
                     "Die Antwort wurde nicht innerhalb der zulässigen Zeit vollständig empfangen " +
                     $"(Zeitüberschreitung nach {timeout.TotalSeconds:0} Sekunden beim Lesen " +

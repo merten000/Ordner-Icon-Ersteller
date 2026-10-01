@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using System.Threading;
 
 namespace OrdnerIconErsteller
 {
@@ -83,8 +84,13 @@ namespace OrdnerIconErsteller
         /// weiterer Fehler 4) - erst dann wird <see cref="WithReferenceImageMention"/>
         /// aufgerufen.
         /// </remarks>
-        public static ScanResult Scan(string folderPath, bool allowReferenceImage = true)
+        public static ScanResult Scan(string folderPath, bool allowReferenceImage = true, CancellationToken cancellationToken = default)
         {
+            // Runde 2 (Befund F-001): ein grosser Ordner oder ein langsames Netzlaufwerk
+            // darf das Beenden/Abbrechen nicht beliebig lange aufhalten - der Abbruch wird
+            // vor jedem Eintrag geprueft und endet mit einer OperationCanceledException.
+            cancellationToken.ThrowIfCancellationRequested();
+
             var relevantEntries = new List<string>();
             bool hasMoreThanListed = false;
             AiIconService.ReferenceImage? referenceImage = null;
@@ -92,6 +98,8 @@ namespace OrdnerIconErsteller
 
             foreach (string path in Directory.EnumerateFileSystemEntries(folderPath))
             {
+                cancellationToken.ThrowIfCancellationRequested();
+
                 string name = Path.GetFileName(path);
                 if (IsIgnored(name))
                 {

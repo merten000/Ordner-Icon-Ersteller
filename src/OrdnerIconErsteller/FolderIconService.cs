@@ -641,6 +641,236 @@ namespace OrdnerIconErsteller
 
         // --- Ausschluss gleichzeitiger Zugriffe auf denselben Ordner ---
 
+        // --- Wiederherstellung nach hartem Prozessende (Runde 2, Befund F-002) ---
+        //
+        // Wird der Prozess (Task-Manager "Task beenden", Absturz, Stromausfall) genau zwischen
+        // dem Anlegen einer Sicherungsdatei (.before-ordnericonersteller.bak) und dem Schreiben
+        // der Statusdatei beendet, verweigert SetFolderIconLocked absichtlich jede weitere
+        // Aenderung: eine Sicherung ohne Statusdatei ist nicht eindeutig zuzuordnen. Das schuetzt
+        // vor Datenverlust und bleibt unveraendert. Neu ist ein bewusst enger, sicherer Weg
+        // heraus - mit genau EINER Ausnahme, die sich beweisen laesst:
+        //
+        // BackupIfExists KOPIERT die Originaldatei; das Original bleibt dabei unangetastet an
+        // seinem Platz. Liegt eine Sicherung ohne Statusdatei vor und ist sie Byte fuer Byte
+        // identisch mit der heute noch vorhandenen Originaldatei, enthaelt sie nichts, was nicht
+        // auch an ihrem urspruenglichen Platz liegt. Nur dann darf sie beiseite gelegt werden -
+        // und auch das nur durch Umbenennen, niemals durch Loeschen, und nur nach ausdruecklicher
+        // Bestaetigung durch den Benutzer (siehe MainForm). In jedem anderen Fall (Sicherung
+        // weicht ab, Originaldatei fehlt, unlesbar, ...) wird nur diagnostiziert, nichts
+        // veraendert und der Ordner zur manuellen Pruefung gemeldet - es wird nie geraten.
+
+        /// <summary>Ergebnis von <see cref="DiagnoseOrphanBackups"/>.</summary>
+        internal enum OrphanBackupState
+        {
+            /// <summary>Kein Problem dieser Art (keine Sicherung ohne Statusdatei).</summary>
+            NoProblem,
+
+            /// <summary>
+            /// Sicherung(en) ohne Statusdatei, jede Byte fuer Byte identisch mit der
+            /// vorhandenen Originaldatei - darf auf Bestaetigung beiseite gelegt werden.
+            /// </summary>
+            SafeToSetAside,
+
+            /// <summary>Nicht eindeutig - nur manuelle Pruefung, es wird nichts angeboten.</summary>
+            NeedsManualReview,
+        }
+
+        /// <summary>Befund zu uebrig gebliebenen Sicherungsdateien in einem Ordner.</summary>
+        internal sealed class OrphanBackupDiagnosis
+        {
+            public OrphanBackupDiagnosis(OrphanBackupState state, IReadOnlyList<string> fileNames, string explanation)
+            {
+                State = state;
+                FileNames = fileNames;
+                Explanation = explanation;
+            }
+
+            public OrphanBackupState State { get; }
+
+            /// <summary>Nur Dateinamen (ohne Ordnerpfad) der betroffenen Sicherungsdateien.</summary>
+            public IReadOnlyList<string> FileNames { get; }
+
+            /// <summary>Verstaendliche Erklaerung fuer den Benutzer (ohne Ordnerpfad).</summary>
+            public string Explanation { get; }
+        }
+
+        /// <summary>
+        /// Prueft rein lesend, ob in <paramref name="folderPath"/> Sicherungsdateien ohne
+        /// gueltige Statusdatei liegen, und ob sie sich sicher beiseite legen lassen. Aendert
+        /// nichts.
+        /// </summary>
+        internal static OrphanBackupDiagnosis DiagnoseOrphanBackups(string folderPath)
+        {
+            if (!Directory.Exists(folderPath))
+                throw new DirectoryNotFoundException($"Ordner nicht gefunden: {folderPath}");
+
+            string icoPath = Path.Combine(folderPath, IconFileName);
+            string desktopIniPath = Path.Combine(folderPath, DesktopIniName);
+            string markerPath = Path.Combine(folderPath, MarkerFileName);
+
+            // Existiert eine Statusdatei, ist das ein anderer Zustand (sie wird beim Setzen/
+            // Entfernen streng validiert) - nicht Gegenstand dieser Wiederherstellung.
+            if (File.Exists(markerPath))
+            {
+                return new OrphanBackupDiagnosis(OrphanBackupState.NoProblem, Array.Empty<string>(), string.Empty);
+            }
+
+            var pairs = new List<(string Live, string Backup)>
+            {
+                (desktopIniPath, desktopIniPath + BackupSuffix),
+                (icoPath, icoPath + BackupSuffix),
+            };
+
+            var backups = new List<(string Live, string Backup)>();
+            foreach (var pair in pairs)
+            {
+                if (File.Exists(pair.Backup))
+                {
+                    backups.Add(pair);
+                }
+            }
+
+            if (backups.Count == 0)
+            {
+                return new OrphanBackupDiagnosis(OrphanBackupState.NoProblem, Array.Empty<string>(), string.Empty);
+            }
+
+            var names = new List<string>();
+            foreach (var pair in backups)
+            {
+                names.Add(Path.GetFileName(pair.Backup));
+            }
+
+            string nameList = string.Join(", ", names);
+            bool allIdentical = true;
+            foreach (var pair in backups)
+            {
+                try
+                {
+                    if (!File.Exists(pair.Live) || !FilesAreIdentical(pair.Live, pair.Backup))
+                    {
+                        allIdentical = false;
+                        break;
+                    }
+                }
+                catch (Exception)
+                {
+                    // Nicht lesbar/gesperrt: im Zweifel NICHT als sicher einstufen.
+                    allIdentical = false;
+                    break;
+                }
+            }
+
+            if (allIdentical)
+            {
+                return new OrphanBackupDiagnosis(OrphanBackupState.SafeToSetAside, names,
+                    $"In diesem Ordner liegt noch eine Sicherungsdatei von Ordner-Icon-Ersteller ({nameList}), " +
+                    "aber keine gültige Statusdatei. Das ist typisch für ein hart beendetes Programm. " +
+                    "Die Sicherung ist Byte für Byte identisch mit der Datei, die aktuell im Ordner liegt - " +
+                    "durch sie geht also nichts verloren.");
+            }
+
+            return new OrphanBackupDiagnosis(OrphanBackupState.NeedsManualReview, names,
+                $"In diesem Ordner liegt eine Sicherungsdatei von Ordner-Icon-Ersteller ({nameList}), " +
+                "aber keine gültige Statusdatei - und die Sicherung ist NICHT identisch mit der aktuell im " +
+                "Ordner liegenden Datei (oder diese fehlt bzw. ist nicht lesbar). Es lässt sich nicht sicher " +
+                "entscheiden, welche Datei die ursprüngliche ist. Aus Sicherheitsgründen wird nichts verändert - " +
+                "bitte den Ordnerinhalt manuell prüfen (die Sicherungsdateien sind versteckt, Anzeige versteckter " +
+                "und geschützter Dateien im Explorer einschalten).");
+        }
+
+        /// <summary>
+        /// Legt uebrig gebliebene Sicherungsdateien beiseite, aber NUR wenn die Diagnose unter
+        /// der Ordnersperre erneut <see cref="OrphanBackupState.SafeToSetAside"/> ergibt.
+        /// Die Dateien werden umbenannt (Namensanhang ".verworfen-Zeitstempel"), niemals
+        /// geloescht oder ueberschrieben. Gibt die neuen Dateinamen zurueck. Danach ist der
+        /// reservierte Sicherungsname frei, und ein erneutes "Icon setzen" legt eine frische
+        /// Sicherung der unveraenderten Originaldatei an.
+        /// </summary>
+        internal static IReadOnlyList<string> SetAsideOrphanBackups(string folderPath)
+        {
+            if (!Directory.Exists(folderPath))
+                throw new DirectoryNotFoundException($"Ordner nicht gefunden: {folderPath}");
+
+            var movedNames = new List<string>();
+            RunExclusive(folderPath, () =>
+            {
+                // Unter der Sperre noch einmal pruefen - zwischen Diagnose und Bestaetigung
+                // kann sich der Ordner geaendert haben.
+                OrphanBackupDiagnosis diagnosis = DiagnoseOrphanBackups(folderPath);
+                if (diagnosis.State != OrphanBackupState.SafeToSetAside)
+                {
+                    throw new InvalidOperationException(
+                        "Die Sicherungsdateien lassen sich nicht mehr eindeutig als unkritisch einstufen " +
+                        "(der Ordner hat sich verändert). Es wurde nichts verändert.");
+                }
+
+                string stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+                foreach (string fileName in diagnosis.FileNames)
+                {
+                    string source = Path.Combine(folderPath, fileName);
+                    string target = source + ".verworfen-" + stamp;
+                    int counter = 2;
+                    while (File.Exists(target))
+                    {
+                        target = source + ".verworfen-" + stamp + "-" + counter;
+                        counter++;
+                    }
+
+                    // Umbenennen ohne Ueberschreiben; Attribute (versteckt/System) bleiben erhalten.
+                    File.Move(source, target, overwrite: false);
+                    movedNames.Add(Path.GetFileName(target));
+                }
+            });
+            return movedNames;
+        }
+
+        /// <summary>Vergleicht zwei Dateien Byte fuer Byte (erst Laenge, dann Inhalt in Bloecken).</summary>
+        private static bool FilesAreIdentical(string pathA, string pathB)
+        {
+            using var a = new FileStream(pathA, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var b = new FileStream(pathB, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            if (a.Length != b.Length)
+            {
+                return false;
+            }
+
+            var bufferA = new byte[81920];
+            var bufferB = new byte[81920];
+            while (true)
+            {
+                int readA = ReadBlock(a, bufferA);
+                int readB = ReadBlock(b, bufferB);
+                if (readA != readB)
+                {
+                    return false;
+                }
+                if (readA == 0)
+                {
+                    return true;
+                }
+                if (!bufferA.AsSpan(0, readA).SequenceEqual(bufferB.AsSpan(0, readB)))
+                {
+                    return false;
+                }
+            }
+        }
+
+        private static int ReadBlock(Stream stream, byte[] buffer)
+        {
+            int total = 0;
+            while (total < buffer.Length)
+            {
+                int read = stream.Read(buffer, total, buffer.Length - total);
+                if (read == 0)
+                {
+                    break;
+                }
+                total += read;
+            }
+            return total;
+        }
+
         /// <summary>
         /// Führt <paramref name="action"/> aus, während eine exklusive Dateisperre für
         /// diesen Ordner gehalten wird. Eine zweite, gleichzeitig gestartete Instanz von

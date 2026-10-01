@@ -1,6 +1,8 @@
 using System;
 using System.Drawing;
+using System.Collections.Generic;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
@@ -37,6 +39,8 @@ namespace OrdnerIconErsteller
         private readonly Button _btnAiDeleteKey = new() { Text = "Löschen" };
         private readonly Label _lblAiKeyStatus = new() { AutoSize = true };
         private readonly Button _btnAiGenerate = new() { Text = "Icon per KI erzeugen" };
+        // Runde 2 (Befund F-001): kontrollierte Abbruchmoeglichkeit fuer laufende KI-Arbeit.
+        private readonly Button _btnAiCancel = new() { Text = "Abbrechen", Enabled = false };
         private readonly TextBox _txtLog = new()
         {
             Multiline = true,
@@ -45,12 +49,22 @@ namespace OrdnerIconErsteller
             Font = new Font("Consolas", 9f)
         };
 
-        // Waehrend eine KI-Icon-Transaktion laeuft (Netzwerkanfrage + anschliessendes
-        // Schreiben/Icon-Setzen in FolderIconService), darf das Fenster nicht
-        // geschlossen werden: ein Prozessende mitten im Datei-Commit wuerde Rollback
-        // und finally-Bloecke in FolderIconService moeglicherweise nie ausfuehren
-        // (ChatGPT-Gegenpruefung von v2.1.2, Freigabeblocker 3).
-        private bool _aiOperationInProgress;
+        // Phase der aktuell laufenden Operation (Runde 2, Befund F-001; vorher nur ein
+        // bool "_aiOperationInProgress", das beim Schliessen pauschal alles blockierte).
+        //  - Cancellable: Ordner-Scan, Zustimmung, Netzwerkanfrage an den KI-Anbieter. Hier
+        //    ist im Zielordner noch nichts veraendert, ein Abbruch ueber den "Abbrechen"-Knopf
+        //    oder beim Schliessen ist jederzeit gefahrlos moeglich.
+        //  - Committing: Dateischritt im Zielordner (Icon setzen/entfernen bzw. erzeugtes
+        //    Bild schreiben und Icon setzen). Diese Transaktion in FolderIconService hat ein
+        //    eigenes Rollback und wird bewusst nicht mittendrin abgebrochen - das Schliessen
+        //    durch den Benutzer wird deshalb in dieser (kurzen) Phase abgewiesen, bei
+        //    Windows-Herunterfahren/Task-Manager wird begrenzt auf ihr Ende gewartet
+        //    (ChatGPT-Gegenpruefung von v2.1.2, Freigabeblocker 3, bleibt damit erfuellt).
+        // Die Entscheidung beim Schliessen trifft OperationGuard.DecideClose.
+        private OperationPhase _phase = OperationPhase.Idle;
+        private CancellationTokenSource? _aiCts;
+        private Task? _commitTask;
+        private bool _closeAfterOperation;
 
         public MainForm(string? startFolder)
         {
@@ -157,7 +171,9 @@ namespace OrdnerIconErsteller
 
             var aiActionPanel = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
             _btnAiGenerate.Width = 170;
+            _btnAiCancel.Width = 110;
             aiActionPanel.Controls.Add(_btnAiGenerate);
+            aiActionPanel.Controls.Add(_btnAiCancel);
 
             aiLayout.Controls.Add(aiKeyPanel, 0, 0);
             aiLayout.Controls.Add(_lblAiKeyStatus, 0, 1);
@@ -260,10 +276,11 @@ namespace OrdnerIconErsteller
                 }
             };
 
-            _btnSetIcon.Click += (_, _) => SetIcon();
-            _btnRemoveIcon.Click += (_, _) => RemoveIcon();
+            _btnSetIcon.Click += async (_, _) => await SetIconAsync();
+            _btnRemoveIcon.Click += async (_, _) => await RemoveIconAsync();
             _chkContextMenu.CheckedChanged += (_, _) => OnContextMenuCheckedChanged();
             _btnAiGenerate.Click += async (_, _) => await GenerateAiIconAsync();
+            _btnAiCancel.Click += (_, _) => RequestAiCancel();
             _cmbAiProvider.SelectedIndexChanged += (_, _) => RefreshAiKeyField();
             _chkShowAiKey.CheckedChanged += (_, _) => _txtAiKey.UseSystemPasswordChar = !_chkShowAiKey.Checked;
             _btnAiSaveKey.Click += (_, _) => SaveAiKey();
@@ -302,8 +319,19 @@ namespace OrdnerIconErsteller
             viewer.ShowDialog(this);
         }
 
-        private void SetIcon()
+        // Runde 2 (Befund F-003): "Icon setzen"/"Icon entfernen" liefen bisher synchron im
+        // UI-Thread - ein grosses Bild oder ein langsamer Datentraeger liess das Fenster
+        // einfrieren ("Keine Rueckmeldung"), und der Benutzer beendete es evtl. hart. Jetzt
+        // laeuft der Dateischritt im Thread-Pool (Ordner/Bild werden vorher festgehalten),
+        // die Bedienelemente sind waehrenddessen gesperrt. Die Dateitransaktion selbst
+        // (Rollback, Sperre) ist unveraendert; sie wird nicht abgebrochen, siehe _phase.
+        private async Task SetIconAsync()
         {
+            if (_phase != OperationPhase.Idle)
+            {
+                return;
+            }
+
             if (string.IsNullOrWhiteSpace(_txtFolder.Text) || !Directory.Exists(_txtFolder.Text))
             {
                 MessageBox.Show(this, "Bitte zuerst einen gültigen Ordner auswählen.", "Ordner fehlt",
@@ -317,17 +345,30 @@ namespace OrdnerIconErsteller
                 return;
             }
 
+            string folder = _txtFolder.Text;
+            string image = _txtImage.Text;
+
+            BeginOperation(OperationPhase.Committing);
             try
             {
-                FolderIconService.SetFolderIcon(_txtFolder.Text, _txtImage.Text);
+                if (!await PreflightOrphanBackupsAsync(folder))
+                {
+                    return;
+                }
+
+                _commitTask = Task.Run(() => FolderIconService.SetFolderIcon(folder, image));
+                await _commitTask;
+                EndOperation();
                 // Pruefbericht v2.7.3 (Gesamtdurchlauf), Freigabeblocker 3: kein vollstaendiger
-                // Ordnerpfad mehr im Log (siehe DATENSCHUTZ.md).
+                // Ordnerpfad mehr im Log (siehe DATENSCHUTZ.md). Der Pfad steht ohnehin bereits
+                // sichtbar im Feld "Ordner" direkt darueber.
                 Log("Icon wurde gesetzt.");
                 MessageBox.Show(this, "Icon wurde gesetzt. Falls der Explorer es nicht sofort anzeigt, Ansicht kurz aktualisieren (F5).",
                     "Fertig", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {
+                EndOperation();
                 // Pruefbericht v2.7.3 (Gesamtdurchlauf), Freigabeblocker 3: FolderIconService-
                 // Ausnahmen enthalten haeufig den vollstaendigen Ordner-/Dateipfad (siehe z.B.
                 // DirectoryNotFoundException/FileNotFoundException dort) - ex.Message deshalb
@@ -337,10 +378,19 @@ namespace OrdnerIconErsteller
                 MessageBox.Show(this, $"Fehler beim Setzen des Icons:\n{ex.Message}", "Fehler",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+            finally
+            {
+                EndOperation();
+            }
         }
 
-        private void RemoveIcon()
+        private async Task RemoveIconAsync()
         {
+            if (_phase != OperationPhase.Idle)
+            {
+                return;
+            }
+
             if (string.IsNullOrWhiteSpace(_txtFolder.Text) || !Directory.Exists(_txtFolder.Text))
             {
                 MessageBox.Show(this, "Bitte zuerst einen gültigen Ordner auswählen.", "Ordner fehlt",
@@ -348,17 +398,70 @@ namespace OrdnerIconErsteller
                 return;
             }
 
+            string folder = _txtFolder.Text;
+
+            BeginOperation(OperationPhase.Committing);
             try
             {
-                FolderIconService.RemoveFolderIcon(_txtFolder.Text);
+                _commitTask = Task.Run(() => FolderIconService.RemoveFolderIcon(folder));
+                await _commitTask;
+                EndOperation();
                 Log("Icon wurde entfernt.");
             }
             catch (Exception ex)
             {
+                EndOperation();
                 Log("FEHLER beim Entfernen des Icons (siehe Fehlermeldung im Dialogfenster).");
                 MessageBox.Show(this, $"Fehler beim Entfernen des Icons:\n{ex.Message}", "Fehler",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+            finally
+            {
+                EndOperation();
+            }
+        }
+
+        /// <summary>
+        /// Runde 2 (Befund F-002): prueft VOR dem eigentlichen Vorgang (und damit bei KI-Icons
+        /// vor jeder kostenpflichtigen Anfrage), ob in einem vorherigen, hart beendeten Lauf
+        /// eine Sicherungsdatei ohne Statusdatei liegen geblieben ist. Liefert true, wenn der
+        /// Vorgang fortgesetzt werden darf. Ist die Sicherung nachweislich unkritisch (Byte
+        /// fuer Byte identisch mit der vorhandenen Datei), wird dem Benutzer angeboten, sie
+        /// beiseite zu legen (umbenennen, NICHT loeschen); sonst wird nur erklaert und
+        /// abgebrochen. Es wird nie automatisch geloescht oder geraten.
+        /// </summary>
+        private async Task<bool> PreflightOrphanBackupsAsync(string folder)
+        {
+            FolderIconService.OrphanBackupDiagnosis diagnosis =
+                await Task.Run(() => FolderIconService.DiagnoseOrphanBackups(folder));
+
+            if (diagnosis.State == FolderIconService.OrphanBackupState.NoProblem)
+            {
+                return true;
+            }
+
+            if (diagnosis.State == FolderIconService.OrphanBackupState.NeedsManualReview)
+            {
+                Log("Übrig gebliebene Sicherungsdatei gefunden - manuelle Prüfung nötig, nichts verändert.");
+                MessageBox.Show(this, diagnosis.Explanation + "\n\nDer Vorgang wurde nicht gestartet.",
+                    "Manuelle Prüfung nötig", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return false;
+            }
+
+            DialogResult answer = MessageBox.Show(this,
+                diagnosis.Explanation + "\n\n" +
+                "Soll die Sicherungsdatei beiseite gelegt werden (sie wird nur umbenannt, NICHT gelöscht) " +
+                "und der Vorgang danach fortgesetzt werden?",
+                "Übrig gebliebene Sicherung", MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2);
+            if (answer != DialogResult.Yes)
+            {
+                Log("Übrig gebliebene Sicherungsdatei nicht angefasst - Vorgang nicht gestartet.");
+                return false;
+            }
+
+            IReadOnlyList<string> moved = await Task.Run(() => FolderIconService.SetAsideOrphanBackups(folder));
+            Log($"{moved.Count} übrig gebliebene Sicherungsdatei(en) beiseite gelegt (umbenannt, nicht gelöscht).");
+            return true;
         }
 
         // Verhindert, dass RefreshMenuStatus() (das den Haken programmatisch auf den
@@ -514,13 +617,13 @@ namespace OrdnerIconErsteller
             // Waehrend ein langsamer Ordner/Netzlaufwerk durchsucht wurde, blieb der
             // Knopf aktiv - ein zweiter Klick konnte einen parallelen zweiten Ablauf
             // starten, der sich mit dem ersten gegenseitig ueber
-            // SetAiOperationControlsEnabled/_aiOperationInProgress entsperrt haette.
+            // SetAiOperationControlsEnabled/_phase entsperrt haette.
             // Deshalb jetzt: fruehzeitiger Ausstieg, falls bereits eine Operation laeuft
             // (Sicherheitsnetz - die deaktivierten Bedienelemente sollten das ohnehin
             // verhindern), und Sperre/Deaktivierung GANZ AM ANFANG setzen, noch vor dem
             // ersten await, mit Scan/Zustimmung/Netzwerkanfrage/Dateitransaktion
             // zusammen in einem einzigen try/finally.
-            if (_aiOperationInProgress)
+            if (_phase != OperationPhase.Idle)
             {
                 return;
             }
@@ -542,11 +645,24 @@ namespace OrdnerIconErsteller
             AiImageProvider provider = _cmbAiProvider.SelectedIndex == 1 ? AiImageProvider.Google : AiImageProvider.OpenAi;
             string enteredPrompt = _txtAiPrompt.Text.Trim();
 
-            SetAiOperationControlsEnabled(false);
-            _aiOperationInProgress = true;
-            Cursor = Cursors.WaitCursor;
+            // Runde 2 (Befund F-001): die Phase "abbrechbar" beginnt hier - bis kurz vor dem
+            // Dateischritt kann der Benutzer ueber "Abbrechen" (oder beim Schliessen) kontrolliert
+            // abbrechen; der Token wird an Ordner-Scan und Netzwerkanfrage durchgereicht.
+            _aiCts = new CancellationTokenSource();
+            CancellationToken cancellationToken = _aiCts.Token;
+            BeginOperation(OperationPhase.Cancellable);
             try
             {
+                // Runde 2 (Befund F-002): uebrig gebliebene Sicherungsdateien eines hart beendeten
+                // frueheren Laufs VOR der (kostenpflichtigen) KI-Anfrage erkennen, nicht erst
+                // danach beim Setzen des Icons.
+                if (!await PreflightOrphanBackupsAsync(targetFolder))
+                {
+                    return;
+                }
+
+                cancellationToken.ThrowIfCancellationRequested();
+
                 // "Icon ohne Text" (Merten-Feedback nach v2.1.4): ist keine Beschreibung
                 // eingegeben, wird nicht mehr abgebrochen, sondern der Zielordner selbst
                 // durchsucht (Dateinamen als Kontext, ein evtl. vorhandenes, bereits
@@ -570,7 +686,12 @@ namespace OrdnerIconErsteller
                         // synchroner Aufruf hier sonst das Fenster einfrieren lassen. Die
                         // Bedienelemente sind zu diesem Zeitpunkt (siehe oben) bereits gesperrt.
                         bool allowReferenceImage = provider == AiImageProvider.Google;
-                        scan = await Task.Run(() => FolderContentScanner.Scan(targetFolder, allowReferenceImage));
+                        scan = await Task.Run(() => FolderContentScanner.Scan(targetFolder, allowReferenceImage, cancellationToken), cancellationToken);
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        // Vom Benutzer angeforderter Abbruch - kein Fehler (siehe aeusserer catch).
+                        throw;
                     }
                     catch (Exception ex)
                     {
@@ -662,7 +783,14 @@ namespace OrdnerIconErsteller
                 // AiIconService liefert an dieser Stelle bereits vollstaendig als
                 // gueltiges Bild dekodierte und in ein kanonisches PNG neu
                 // encodierte Bytes zurueck (siehe dortige DecodeAndReencodeAsPng).
-                byte[] imageBytes = await AiIconService.GenerateIconImageAsync(provider, prompt, referenceImage);
+                byte[] imageBytes = await AiIconService.GenerateIconImageAsync(provider, prompt, referenceImage, cancellationToken);
+
+                // Letzte Abbruchstelle: ab hier wird in den Zielordner geschrieben. Ein bis hierher
+                // angeforderter Abbruch verwirft das (evtl. bereits bezahlte) Bild, ohne den Ordner
+                // zu veraendern; danach laeuft die Transaktion bewusst bis zum Ende.
+                cancellationToken.ThrowIfCancellationRequested();
+                _phase = OperationPhase.Committing;
+                _btnAiCancel.Enabled = false;
 
                 // Schreiben der PNG-Datei UND das anschliessende Setzen des Icons
                 // laufen jetzt als EINE Transaktion unter derselben
@@ -676,8 +804,11 @@ namespace OrdnerIconErsteller
                 // bereits mehrfach gepruefte Sicherungs-/Rollback-Bausteine wie
                 // Icon.ico/desktop.ini. Läuft in einem Thread-Pool-Thread, weil es
                 // sich um blockierende Datei-I/O (kein async I/O) handelt.
-                string generatedImagePath = await Task.Run(
+                Task<string> commitTask = Task.Run(
                     () => FolderIconService.ReplaceGeneratedImageAndSetIcon(targetFolder, imageBytes, preferredImagePath));
+                _commitTask = commitTask;
+                string generatedImagePath = await commitTask;
+                EndOperation();
 
                 _txtImage.Text = generatedImagePath;
 
@@ -690,8 +821,16 @@ namespace OrdnerIconErsteller
                     "Falls der Explorer es nicht sofort anzeigt, Ansicht kurz aktualisieren (F5).",
                     "Fertig", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // Runde 2 (Befund F-001): kontrollierter Abbruch durch den Benutzer. Im Zielordner
+                // wurde nichts veraendert (siehe Phase "abbrechbar").
+                EndOperation();
+                Log("KI-Icon-Erzeugung wurde abgebrochen - im Ordner wurde nichts verändert.");
+            }
             catch (Exception ex)
             {
+                EndOperation();
                 // Pruefbericht v2.7.3 (Gesamtdurchlauf), Freigabeblocker 3: ex.Message kann hier
                 // die rohe Antwort des KI-Anbieters oder Datei-/Ordnernamen enthalten - nicht mehr
                 // ins Log schreiben (siehe DATENSCHUTZ.md und AiIconService).
@@ -701,9 +840,7 @@ namespace OrdnerIconErsteller
             }
             finally
             {
-                Cursor = Cursors.Default;
-                SetAiOperationControlsEnabled(true);
-                _aiOperationInProgress = false;
+                EndOperation();
             }
         }
 
@@ -738,7 +875,7 @@ namespace OrdnerIconErsteller
         }
 
         /// <summary>
-        /// Sperrt/entsperrt waehrend einer laufenden KI-Icon-Erzeugung alle
+        /// Sperrt/entsperrt waehrend einer laufenden Operation alle
         /// Aktionen, die denselben oder einen anderen Ordner betreffen wuerden -
         /// verhindert, dass der Benutzer zwischendurch den Ordner wechselt oder
         /// das Icon manuell setzt/entfernt.
@@ -752,23 +889,112 @@ namespace OrdnerIconErsteller
         }
 
         /// <summary>
-        /// Verhindert, dass das Fenster (und damit der ganze Prozess) waehrend einer
-        /// laufenden KI-Icon-Transaktion geschlossen wird - siehe
-        /// <see cref="_aiOperationInProgress"/>. Ein Benutzer-Klick auf "X" waehrend
-        /// der Wartezeit wuerde sonst den Prozess mitten in FolderIconService.
-        /// ReplaceGeneratedImageAndSetIcon beenden koennen, bevor deren Rollback-/
-        /// finally-Logik greifen kann.
+        /// Beginnt eine Operation: Phase setzen, Bedienelemente sperren, Wartecursor. Der
+        /// "Abbrechen"-Knopf ist nur in der abbrechbaren Phase aktiv.
+        /// </summary>
+        private void BeginOperation(OperationPhase phase)
+        {
+            _phase = phase;
+            SetAiOperationControlsEnabled(false);
+            _btnAiCancel.Enabled = phase == OperationPhase.Cancellable;
+            Cursor = Cursors.WaitCursor;
+        }
+
+        /// <summary>
+        /// Beendet die Operation (mehrfach aufrufbar): Phase zurueck auf "Idle", Token/Task
+        /// freigeben, Bedienelemente entsperren. Wurde waehrend der Operation das Schliessen
+        /// gewuenscht (<see cref="_closeAfterOperation"/>), wird das Fenster jetzt geschlossen.
+        /// </summary>
+        private void EndOperation()
+        {
+            _phase = OperationPhase.Idle;
+            _commitTask = null;
+            CancellationTokenSource? cts = _aiCts;
+            _aiCts = null;
+            try { cts?.Dispose(); }
+            catch (ObjectDisposedException) { /* bereits freigegeben */ }
+
+            Cursor = Cursors.Default;
+            SetAiOperationControlsEnabled(true);
+            _btnAiCancel.Enabled = false;
+
+            if (_closeAfterOperation)
+            {
+                _closeAfterOperation = false;
+                if (!IsDisposed && IsHandleCreated)
+                {
+                    BeginInvoke(new Action(Close));
+                }
+            }
+        }
+
+        /// <summary>
+        /// "Abbrechen"-Knopf: fordert den kontrollierten Abbruch der laufenden KI-Arbeit an
+        /// (nur in der abbrechbaren Phase; danach laeuft die Dateitransaktion zu Ende).
+        /// </summary>
+        private void RequestAiCancel()
+        {
+            if (_phase != OperationPhase.Cancellable)
+            {
+                return;
+            }
+
+            _btnAiCancel.Enabled = false;
+            Log("Abbruch angefordert ...");
+            try { _aiCts?.Cancel(); }
+            catch (ObjectDisposedException) { /* Operation ist gerade beendet worden */ }
+        }
+
+        /// <summary>
+        /// Entscheidet beim Schliessen anhand von Phase und Grund (siehe
+        /// <see cref="OperationGuard.DecideClose"/>), statt wie vorher waehrend einer KI-
+        /// Operation pauschal alles zu blockieren (Runde 2, Befund F-001):
+        ///  - Benutzer schliesst waehrend abbrechbarer Arbeit: Rueckfrage, bei "Ja" Abbruch und
+        ///    danach automatisches Schliessen.
+        ///  - Benutzer schliesst waehrend des Dateischritts: kurz abweisen (Rollback-Sicherheit).
+        ///  - Windows-Herunterfahren/Task-Manager: nie blockieren. Abbrechbare Arbeit wird
+        ///    abgebrochen; beim Dateischritt wird hoechstens wenige Sekunden auf dessen Ende
+        ///    gewartet (best effort - ein hartes Beenden von aussen laesst sich nicht verhindern,
+        ///    dafuer gibt es den Wiederherstellungsweg aus Befund F-002).
         /// </summary>
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
-            if (_aiOperationInProgress)
+            CloseAction action = OperationGuard.DecideClose(_phase, e.CloseReason == CloseReason.UserClosing);
+
+            switch (action)
             {
-                e.Cancel = true;
-                MessageBox.Show(this,
-                    "Gerade läuft noch eine KI-Icon-Erzeugung. Bitte warten, bis sie abgeschlossen ist, " +
-                    "bevor das Programm beendet wird.",
-                    "Vorgang läuft noch", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
+                case CloseAction.AskCancelThenClose:
+                    e.Cancel = true;
+                    DialogResult answer = MessageBox.Show(this,
+                        "Gerade läuft noch eine KI-Icon-Erzeugung. Soll sie abgebrochen und das Programm " +
+                        "danach beendet werden? Im Ordner wird dabei nichts verändert.",
+                        "Vorgang läuft noch", MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2);
+                    if (answer == DialogResult.Yes)
+                    {
+                        _closeAfterOperation = true;
+                        RequestAiCancel();
+                        // Hat die Operation den abbrechbaren Teil inzwischen verlassen, beendet sie
+                        // sich selbst und schliesst das Fenster danach (EndOperation).
+                    }
+                    return;
+
+                case CloseAction.BlockCommitting:
+                    e.Cancel = true;
+                    MessageBox.Show(this,
+                        "Es wird gerade in den Ordner geschrieben. Das dauert nur wenige Sekunden und darf " +
+                        "nicht unterbrochen werden. Bitte kurz warten und dann erneut schließen.",
+                        "Vorgang läuft noch", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+
+                case CloseAction.CancelAndAllow:
+                    try { _aiCts?.Cancel(); }
+                    catch (ObjectDisposedException) { /* bereits beendet */ }
+                    break;
+
+                case CloseAction.WaitForCommitAndAllow:
+                    try { _commitTask?.Wait(TimeSpan.FromSeconds(8)); }
+                    catch (Exception) { /* Fehler meldet die Operation selbst; hier nur begrenzt warten */ }
+                    break;
             }
 
             base.OnFormClosing(e);

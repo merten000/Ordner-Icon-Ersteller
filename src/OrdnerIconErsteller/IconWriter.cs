@@ -20,7 +20,27 @@ namespace OrdnerIconErsteller
 
         public static void CreateIcoFromImage(string sourceImagePath, string targetIcoPath)
         {
-            using var original = Image.FromFile(sourceImagePath);
+            // Runde 2 (Befund F-003): vorher wurde jedes manuell gewaehlte Bild ohne jede
+            // Grenze mit Image.FromFile geoeffnet und voll in den Speicher gezeichnet. Jetzt
+            // werden zuerst Dateigroesse und - ohne die Bilddaten zu dekodieren
+            // (validateImageData: false liest nur den Kopf) - die Abmessungen geprueft;
+            // erst danach wird tatsaechlich gezeichnet. Die Grenzen entsprechen denen der
+            // KI-Bilder (siehe ImageLimits).
+            long fileBytes = new FileInfo(sourceImagePath).Length;
+            string? sizeProblem = ImageLimits.Check(fileBytes, -1, -1);
+            if (sizeProblem is not null)
+            {
+                throw new InvalidOperationException(sizeProblem);
+            }
+
+            using var sourceStream = new FileStream(sourceImagePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            using var original = Image.FromStream(sourceStream, useEmbeddedColorManagement: false, validateImageData: false);
+
+            string? dimensionProblem = ImageLimits.Check(fileBytes, original.Width, original.Height);
+            if (dimensionProblem is not null)
+            {
+                throw new InvalidOperationException(dimensionProblem);
+            }
 
             var frames = new List<(int size, byte[] pngBytes)>();
             foreach (var size in Sizes)
