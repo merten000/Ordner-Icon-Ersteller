@@ -17,8 +17,8 @@ Nur das Layout des Hauptfensters wurde überarbeitet (`MainForm.cs`: Konstruktor
   (optional)“ mit Anbieter, API-Schlüssel und Beschreibung, sowie „Protokoll“.
 - Einheitliche Knopfhöhe und -abstände, die Hauptaktionen („Icon setzen“, „Icon per KI
   erzeugen“) sind hervorgehoben, leere Felder zeigen einen Hinweistext.
-- Segoe UI und DPI-Skalierung (`AutoScaleMode.Dpi`), größere Standard- und Mindestgröße
-  des Fensters.
+- Segoe UI und DPI-Skalierung (`AutoScaleMode.Dpi`), größere Standardgröße des Fensters;
+  in kleinen Fenstern erscheint eine Scrollleiste, damit nichts abgeschnitten wird.
 - Versionsnummer, Installer und Build-Weg sind unverändert.
 
 ## ChatGPT-Gegenprüfung v2.7.3 (Gesamtdurchlauf): zwei Freigabeblocker + zwei weitere Punkte behoben (v2.7.3 → v2.7.4)

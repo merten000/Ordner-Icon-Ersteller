@@ -84,7 +84,7 @@ namespace OrdnerIconErsteller
             Width = 760;
             Height = 720;
             StartPosition = FormStartPosition.CenterScreen;
-            MinimumSize = new Size(680, 640);
+            MinimumSize = new Size(680, 480);
 
             BuildLayout();
             WireEvents();
@@ -370,7 +370,11 @@ namespace OrdnerIconErsteller
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             root.Controls.Add(topBar, 0, 0);
             root.Controls.Add(content, 0, 1);
-            Controls.Add(root);
+
+            // Kleine Fenster: Inhalt bleibt vollstaendig erreichbar (Scrollleiste statt Abschneiden, F-001).
+            var scrollHost = new Panel { Dock = DockStyle.Fill, AutoScroll = true, AutoScrollMinSize = new Size(0, 672) };
+            scrollHost.Controls.Add(root);
+            Controls.Add(scrollHost);
         }
 
         private void WireEvents()
