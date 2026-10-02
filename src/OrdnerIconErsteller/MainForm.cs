@@ -372,9 +372,22 @@ namespace OrdnerIconErsteller
             root.Controls.Add(content, 0, 1);
 
             // Kleine Fenster: Inhalt bleibt vollstaendig erreichbar (Scrollleiste statt Abschneiden, F-001).
-            var scrollHost = new Panel { Dock = DockStyle.Fill, AutoScroll = true, AutoScrollMinSize = new Size(0, 672) };
+            // Die Mindest-Scrollhoehe wird nach dem DPI-Skalieren aus dem echten Layout berechnet
+            // (keine feste Pixelzahl, F-002), siehe UpdateScrollBedarf().
+            scrollRoot = root;
+            scrollHost = new Panel { Dock = DockStyle.Fill, AutoScroll = true };
             scrollHost.Controls.Add(root);
             Controls.Add(scrollHost);
+            Shown += (s, e) => UpdateScrollBedarf();
+        }
+
+        private Panel scrollHost = null!;
+        private TableLayoutPanel scrollRoot = null!;
+
+        private void UpdateScrollBedarf()
+        {
+            int bedarf = scrollRoot.GetPreferredSize(new Size(scrollHost.ClientSize.Width, 0)).Height;
+            scrollHost.AutoScrollMinSize = new Size(0, bedarf);
         }
 
         private void WireEvents()
