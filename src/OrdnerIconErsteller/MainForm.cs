@@ -373,21 +373,28 @@ namespace OrdnerIconErsteller
 
             // Kleine Fenster: Inhalt bleibt vollstaendig erreichbar (Scrollleiste statt Abschneiden, F-001).
             // Die Mindest-Scrollhoehe wird nach dem DPI-Skalieren aus dem echten Layout berechnet
-            // (keine feste Pixelzahl, F-002), siehe UpdateScrollBedarf().
-            scrollRoot = root;
+            // (keine feste Pixelzahl, F-002/F-003), siehe UpdateScrollBedarf().
+            scrollContent = content;
+            scrollLog = logGroup;
             scrollHost = new Panel { Dock = DockStyle.Fill, AutoScroll = true };
             scrollHost.Controls.Add(root);
             Controls.Add(scrollHost);
             Shown += (s, e) => UpdateScrollBedarf();
+            scrollHost.SizeChanged += (s, e) => UpdateScrollBedarf();
         }
 
         private Panel scrollHost = null!;
-        private TableLayoutPanel scrollRoot = null!;
+        private TableLayoutPanel scrollContent = null!;
+        private GroupBox scrollLog = null!;
 
+        // Tatsaechlicher Platzbedarf: Unterkante des Protokollbereichs in seiner Mindesthoehe
+        // plus unteres Content-Padding (F-003). GetPreferredSize des Root liefert hier zu wenig,
+        // weil die Protokollzeile prozentual ist.
         private void UpdateScrollBedarf()
         {
-            int bedarf = scrollRoot.GetPreferredSize(new Size(scrollHost.ClientSize.Width, 0)).Height;
-            scrollHost.AutoScrollMinSize = new Size(0, bedarf);
+            int bedarf = scrollContent.Top + scrollLog.Top + scrollLog.MinimumSize.Height + scrollContent.Padding.Bottom;
+            if (scrollHost.AutoScrollMinSize.Height != bedarf)
+                scrollHost.AutoScrollMinSize = new Size(0, bedarf);
         }
 
         private void WireEvents()
