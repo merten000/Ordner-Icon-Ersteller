@@ -19,6 +19,11 @@ Nur das Layout des Hauptfensters wurde überarbeitet (`MainForm.cs`: Konstruktor
   erzeugen“) sind hervorgehoben, leere Felder zeigen einen Hinweistext.
 - Segoe UI und DPI-Skalierung (`AutoScaleMode.Dpi`), größere Standardgröße des Fensters;
   in kleinen Fenstern erscheint eine Scrollleiste, damit nichts abgeschnitten wird.
+- Helle Karten-Optik nach der Design-Referenz: weiße Karten mit weicher Kante und
+  Symbol-Kreis („Ziel-Ordner“, „Bild für das Icon“, „Icon per KI erzeugen“,
+  „Ausgabeprotokoll“), blaue Hauptknöpfe, zurückhaltende Nebenknöpfe mit kleinen Symbolen
+  (Windows-Symbolschrift, ohne Bilddateien), abgerundete Eingabefelder und ein Statuspunkt.
+  Die Bausteine stehen in `ModernUi.cs`; Steuerelemente, Ereignisse und Logik sind unverändert.
 - Versionsnummer, Installer und Build-Weg sind unverändert.
 
 ## ChatGPT-Gegenprüfung v2.7.3 (Gesamtdurchlauf): zwei Freigabeblocker + zwei weitere Punkte behoben (v2.7.3 → v2.7.4)

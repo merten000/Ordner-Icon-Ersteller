@@ -12,10 +12,10 @@ namespace OrdnerIconErsteller
     {
         private readonly TextBox _txtFolder = new() { ReadOnly = true };
         private readonly TextBox _txtImage = new() { ReadOnly = true };
-        private readonly Button _btnBrowseFolder = new() { Text = "Ordner wählen..." };
-        private readonly Button _btnBrowseImage = new() { Text = "Bild wählen..." };
-        private readonly Button _btnSetIcon = new() { Text = "Icon setzen" };
-        private readonly Button _btnRemoveIcon = new() { Text = "Icon entfernen" };
+        private readonly Button _btnBrowseFolder = new ModernButton { Text = "Ordner wählen...", Glyph = Glyph.Folder };
+        private readonly Button _btnBrowseImage = new ModernButton { Text = "Bild wählen...", Glyph = Glyph.Picture };
+        private readonly Button _btnSetIcon = new ModernButton { Text = "Icon setzen", Kind = ButtonKind.Primary, Glyph = Glyph.Check, CornerColor = Theme.Background };
+        private readonly Button _btnRemoveIcon = new ModernButton { Text = "Icon entfernen", Glyph = Glyph.Delete, CornerColor = Theme.Background };
         private readonly CheckBox _chkContextMenu = new() { Text = "Ins Rechtsklick-Menü integrieren", AutoSize = true };
         private readonly Label _lblMenuStatus = new() { AutoSize = true };
         // Merten-Feedback (v2.5.0-Test): gemeint war kein gemeinsames "Menü"-Dropdown,
@@ -27,20 +27,20 @@ namespace OrdnerIconErsteller
         // einmalig in BuildLayout() befüllt und danach nur noch wiederverwendet -
         // dadurch entfällt auch das Dispose-Problem der vorherigen Fenster-Lösung
         // (v2.4.0/v2.4.1), weil hier nichts pro Klick neu erzeugt/verworfen wird.
-        private readonly Button _btnEinstellungen = new() { Text = "Einstellungen" };
-        private readonly Button _btnRechtliches = new() { Text = "Rechtliches" };
+        private readonly Button _btnEinstellungen = new ModernButton { Text = "Einstellungen", Glyph = Glyph.Settings, TrailingGlyph = Glyph.Chevron, CornerColor = Theme.Background };
+        private readonly Button _btnRechtliches = new ModernButton { Text = "Rechtliches", Glyph = Glyph.Page, TrailingGlyph = Glyph.Chevron, CornerColor = Theme.Background };
         private readonly ContextMenuStrip _settingsMenu = new();
         private readonly ContextMenuStrip _rechtlichesMenu = new();
         private readonly TextBox _txtAiPrompt = new();
         private readonly ComboBox _cmbAiProvider = new() { DropDownStyle = ComboBoxStyle.DropDownList };
         private readonly TextBox _txtAiKey = new() { UseSystemPasswordChar = true };
         private readonly CheckBox _chkShowAiKey = new() { Text = "anzeigen" };
-        private readonly Button _btnAiSaveKey = new() { Text = "Speichern" };
-        private readonly Button _btnAiDeleteKey = new() { Text = "Löschen" };
-        private readonly Label _lblAiKeyStatus = new() { AutoSize = true };
-        private readonly Button _btnAiGenerate = new() { Text = "Icon per KI erzeugen" };
+        private readonly Button _btnAiSaveKey = new ModernButton { Text = "Speichern", Glyph = Glyph.Save };
+        private readonly Button _btnAiDeleteKey = new ModernButton { Text = "Löschen", Glyph = Glyph.Delete };
+        private readonly Label _lblAiKeyStatus = new StatusLabel();
+        private readonly Button _btnAiGenerate = new ModernButton { Text = "Icon per KI erzeugen", Kind = ButtonKind.Primary, Glyph = Glyph.Star };
         // Runde 2 (Befund F-001): kontrollierte Abbruchmoeglichkeit fuer laufende KI-Arbeit.
-        private readonly Button _btnAiCancel = new() { Text = "Abbrechen", Enabled = false };
+        private readonly Button _btnAiCancel = new ModernButton { Text = "Abbrechen", Glyph = Glyph.Cancel, Enabled = false };
         private readonly TextBox _txtLog = new()
         {
             Multiline = true,
@@ -85,6 +85,7 @@ namespace OrdnerIconErsteller
             Height = 720;
             StartPosition = FormStartPosition.CenterScreen;
             MinimumSize = new Size(680, 480);
+            BackColor = Theme.Background;
 
             BuildLayout();
             WireEvents();
@@ -104,13 +105,14 @@ namespace OrdnerIconErsteller
         // Gemeinsame Mass- und Stilwerte der Oberflaeche (Abstaende in 96-DPI-Pixeln, werden ueber
         // AutoScaleMode.Dpi mitskaliert).
         private const int SectionGap = 12;
-        private const int ButtonHeight = 32;
+        private const int ButtonHeight = 34;
 
         private static Label MakeCaption(string text) => new Label
         {
             Text = text,
             AutoSize = true,
             Anchor = AnchorStyles.Left,
+            ForeColor = Theme.Text,
             Margin = new Padding(0, 0, 0, 4)
         };
 
@@ -125,14 +127,20 @@ namespace OrdnerIconErsteller
             }
         }
 
-        private static GroupBox MakeSection(string title) => new GroupBox
+        // Eingabezeile einer Karte: abgerundetes Eingabefeld links, Knopf rechts.
+        private static TableLayoutPanel MakeInputRow(Control input, Control button)
         {
-            Text = title,
-            Dock = DockStyle.Fill,
-            AutoSize = true,
-            Padding = new Padding(12, 8, 12, 12),
-            Margin = new Padding(0, 0, 0, SectionGap)
-        };
+            var row = new TableLayoutPanel { ColumnCount = 2, RowCount = 1, AutoSize = true };
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            row.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            input.Anchor = AnchorStyles.Left | AnchorStyles.Right;
+            input.Margin = new Padding(0, 0, 8, 0);
+            button.Margin = new Padding(0);
+            row.Controls.Add(input, 0, 0);
+            row.Controls.Add(button, 1, 0);
+            return row;
+        }
 
         private void BuildLayout()
         {
@@ -150,97 +158,99 @@ namespace OrdnerIconErsteller
                 Dock = DockStyle.Fill,
                 ColumnCount = 1,
                 Padding = new Padding(16, 12, 16, 16),
-                RowCount = 4
+                RowCount = 5
             };
             content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             content.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
-            // ---- Abschnitt "Ordner und Bild"
-            var sourceGroup = MakeSection("Ordner und Bild");
-            var sourceLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, AutoSize = true };
-            sourceLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            sourceLayout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-
-            _txtFolder.Anchor = AnchorStyles.Left | AnchorStyles.Right;
-            _txtFolder.PlaceholderText = "Noch kein Ordner gewählt";
-            _txtFolder.Margin = new Padding(0, 0, 8, 12);
-            _txtImage.Anchor = AnchorStyles.Left | AnchorStyles.Right;
-            _txtImage.PlaceholderText = "Noch kein Bild gewählt";
-            _txtImage.Margin = new Padding(0, 0, 8, 0);
+            // ---- Karte "Ziel-Ordner"
             StyleButton(_btnBrowseFolder, 150);
-            _btnBrowseFolder.Margin = new Padding(0, 0, 0, 12);
+            var folderCard = new CardPanel("Ziel-Ordner", Glyph.Folder);
+            _txtFolder.PlaceholderText = "Noch kein Ordner gewählt";
+            folderCard.SetBody(MakeInputRow(new InputBox(_txtFolder, ButtonHeight), _btnBrowseFolder));
+
+            // ---- Karte "Bild für das Icon"
             StyleButton(_btnBrowseImage, 150);
-            _btnBrowseImage.Margin = new Padding(0);
+            var imageCard = new CardPanel("Bild für das Icon", Glyph.Picture, "PNG, JPG, BMP oder ICO");
+            _txtImage.PlaceholderText = "Noch kein Bild gewählt";
+            imageCard.SetBody(MakeInputRow(new InputBox(_txtImage, ButtonHeight), _btnBrowseImage));
 
-            var folderCaption = MakeCaption("Ziel-Ordner");
-            var imageCaption = MakeCaption("Bild für das Icon (PNG, JPG, BMP oder ICO)");
-            sourceLayout.Controls.Add(folderCaption, 0, 0);
-            sourceLayout.SetColumnSpan(folderCaption, 2);
-            sourceLayout.Controls.Add(_txtFolder, 0, 1);
-            sourceLayout.Controls.Add(_btnBrowseFolder, 1, 1);
-            sourceLayout.Controls.Add(imageCaption, 0, 2);
-            sourceLayout.SetColumnSpan(imageCaption, 2);
-            sourceLayout.Controls.Add(_txtImage, 0, 3);
-            sourceLayout.Controls.Add(_btnBrowseImage, 1, 3);
-            sourceGroup.Controls.Add(sourceLayout);
-
-            // ---- Aktionen: Icon setzen / entfernen
+            // ---- Aktionen: Icon setzen (Hauptaktion, blau) / entfernen (zurueckhaltend)
             var actionPanel = new FlowLayoutPanel
             {
                 Dock = DockStyle.Fill,
                 AutoSize = true,
                 FlowDirection = FlowDirection.LeftToRight,
                 WrapContents = false,
-                Margin = new Padding(0, 0, 0, SectionGap)
+                Margin = new Padding(0, 0, 0, 12)
             };
             StyleButton(_btnSetIcon, 170, primary: true);
             StyleButton(_btnRemoveIcon, 170);
             actionPanel.Controls.Add(_btnSetIcon);
             actionPanel.Controls.Add(_btnRemoveIcon);
 
-            // ---- Abschnitt "Icon per KI erzeugen (optional)"
-            var aiGroup = MakeSection("Icon per KI erzeugen (optional)");
-            var aiLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, AutoSize = true };
+            // ---- Karte "Icon per KI erzeugen (optional)"
+            var aiCard = new CardPanel("Icon per KI erzeugen (optional)", Glyph.Star);
+            var aiLayout = new TableLayoutPanel { ColumnCount = 1, AutoSize = true };
             aiLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
 
             // Anbieter + API-Schluessel direkt im Hauptfenster (bewusst kein separater Dialog).
-            var aiKeyPanel = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 5, AutoSize = true };
+            var aiKeyPanel = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 5, RowCount = 2, AutoSize = true };
             aiKeyPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             aiKeyPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             aiKeyPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             aiKeyPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             aiKeyPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            _cmbAiProvider.Width = 110;
+            aiKeyPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            aiKeyPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            _cmbAiProvider.Width = 120;
             _cmbAiProvider.Anchor = AnchorStyles.Left;
             _cmbAiProvider.Margin = new Padding(0, 0, 8, 0);
+            _cmbAiProvider.FlatStyle = FlatStyle.Flat;
+            _cmbAiProvider.BackColor = Theme.Card;
             _cmbAiProvider.Items.Add("OpenAI");
             _cmbAiProvider.Items.Add("Google");
             _cmbAiProvider.SelectedIndex = 0;
-            _txtAiKey.Anchor = AnchorStyles.Left | AnchorStyles.Right;
             _txtAiKey.PlaceholderText = "API-Schlüssel für den gewählten Anbieter";
-            _txtAiKey.Margin = new Padding(0, 0, 8, 0);
+            // Auge im Schluesselfeld: nur eine zweite Bedienmoeglichkeit fuer das vorhandene
+            // Kontrollkaestchen "anzeigen" (keine neue Funktion).
+            var eyeButton = new ModernButton { Kind = ButtonKind.Ghost, Glyph = Glyph.Eye, Width = 28, Height = 26, TabStop = false };
+            eyeButton.Click += (_, _) => _chkShowAiKey.Checked = !_chkShowAiKey.Checked;
+            var keyInput = new InputBox(_txtAiKey, ButtonHeight) { Adornment = eyeButton };
+            keyInput.Anchor = AnchorStyles.Left | AnchorStyles.Right;
+            keyInput.Margin = new Padding(0, 0, 8, 0);
             _chkShowAiKey.AutoSize = true;
             _chkShowAiKey.Anchor = AnchorStyles.Left;
             _chkShowAiKey.Margin = new Padding(0, 0, 12, 0);
-            StyleButton(_btnAiSaveKey, 100);
+            StyleButton(_btnAiSaveKey, 110);
             StyleButton(_btnAiDeleteKey, 100);
             _btnAiDeleteKey.Margin = new Padding(0);
-            aiKeyPanel.Controls.Add(_cmbAiProvider, 0, 0);
-            aiKeyPanel.Controls.Add(_txtAiKey, 1, 0);
-            aiKeyPanel.Controls.Add(_chkShowAiKey, 2, 0);
-            aiKeyPanel.Controls.Add(_btnAiSaveKey, 3, 0);
-            aiKeyPanel.Controls.Add(_btnAiDeleteKey, 4, 0);
+            var providerCaption = MakeCaption("Anbieter:");
+            var keyCaption = MakeCaption("API-Schlüssel für den gewählten Anbieter:");
+            aiKeyPanel.Controls.Add(providerCaption, 0, 0);
+            aiKeyPanel.Controls.Add(keyCaption, 1, 0);
+            aiKeyPanel.SetColumnSpan(keyCaption, 4);
+            aiKeyPanel.Controls.Add(_cmbAiProvider, 0, 1);
+            aiKeyPanel.Controls.Add(keyInput, 1, 1);
+            aiKeyPanel.Controls.Add(_chkShowAiKey, 2, 1);
+            aiKeyPanel.Controls.Add(_btnAiSaveKey, 3, 1);
+            aiKeyPanel.Controls.Add(_btnAiDeleteKey, 4, 1);
 
             _lblAiKeyStatus.Anchor = AnchorStyles.Left;
-            _lblAiKeyStatus.Margin = new Padding(0, 6, 0, 12);
+            _lblAiKeyStatus.ForeColor = Theme.Text;
+            _lblAiKeyStatus.Margin = new Padding(0, 10, 0, 10);
 
-            var promptCaption = MakeCaption("Beschreibung (Prompt) – optional");
-            _txtAiPrompt.Anchor = AnchorStyles.Left | AnchorStyles.Right;
+            var promptCaption = MakeCaption("Beschreibung (Prompt) – optional:");
             _txtAiPrompt.PlaceholderText = "z. B. \"ein minimalistisches blaues Wolken-Symbol\" - leer lassen, damit der Ordnerinhalt selbst als Grundlage dient";
-            _txtAiPrompt.Margin = new Padding(0, 0, 0, 12);
+            var promptInput = new InputBox(_txtAiPrompt, ButtonHeight)
+            {
+                Anchor = AnchorStyles.Left | AnchorStyles.Right,
+                Margin = new Padding(0, 0, 0, 12)
+            };
 
             var aiActionPanel = new FlowLayoutPanel
             {
@@ -249,7 +259,7 @@ namespace OrdnerIconErsteller
                 FlowDirection = FlowDirection.LeftToRight,
                 WrapContents = false
             };
-            StyleButton(_btnAiGenerate, 190, primary: true);
+            StyleButton(_btnAiGenerate, 200, primary: true);
             StyleButton(_btnAiCancel, 120);
             aiActionPanel.Controls.Add(_btnAiGenerate);
             aiActionPanel.Controls.Add(_btnAiCancel);
@@ -257,23 +267,18 @@ namespace OrdnerIconErsteller
             aiLayout.Controls.Add(aiKeyPanel, 0, 0);
             aiLayout.Controls.Add(_lblAiKeyStatus, 0, 1);
             aiLayout.Controls.Add(promptCaption, 0, 2);
-            aiLayout.Controls.Add(_txtAiPrompt, 0, 3);
+            aiLayout.Controls.Add(promptInput, 0, 3);
             aiLayout.Controls.Add(aiActionPanel, 0, 4);
-            aiGroup.Controls.Add(aiLayout);
+            aiCard.SetBody(aiLayout);
 
-            // ---- Abschnitt "Protokoll" (nimmt den restlichen Platz)
-            var logGroup = new GroupBox
+            // ---- Karte "Ausgabeprotokoll" (nimmt den restlichen Platz)
+            var logCard = new CardPanel("Ausgabeprotokoll", Glyph.Page)
             {
-                Text = "Protokoll",
-                Dock = DockStyle.Fill,
-                Padding = new Padding(12, 8, 12, 12),
-                MinimumSize = new Size(0, 110),
+                MinimumSize = new Size(0, 150),
                 Margin = new Padding(0)
             };
-            _txtLog.Dock = DockStyle.Fill;
-            // Schreibgeschuetzte TextBoxen bekaemen sonst den grauen "deaktiviert"-Hintergrund.
-            _txtLog.BackColor = SystemColors.Window;
-            logGroup.Controls.Add(_txtLog);
+            _txtLog.Multiline = true;
+            logCard.SetBody(new InputBox(_txtLog, 80));
 
             // ---- Kopfzeile: Titel links, "Einstellungen"/"Rechtliches" rechts
             // Kopfzeile und Inhalt liegen in EINEM gemeinsamen Raster (root), damit das Ergebnis nicht von
@@ -282,7 +287,7 @@ namespace OrdnerIconErsteller
             topBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             topBar.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             topBar.RowStyles.Add(new RowStyle(SizeType.Absolute, 1));
-            var separator = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0), BackColor = SystemColors.ControlDark };
+            var separator = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0), BackColor = Theme.Border };
             var headerLayout = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
@@ -295,27 +300,37 @@ namespace OrdnerIconErsteller
             headerLayout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             headerLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
-            var titleLayout = new FlowLayoutPanel
+            var titleTexts = new FlowLayoutPanel
             {
-                Anchor = AnchorStyles.Left,
                 FlowDirection = FlowDirection.TopDown,
                 WrapContents = false,
-                AutoSize = true
+                AutoSize = true,
+                Margin = new Padding(0)
             };
-            titleLayout.Controls.Add(new Label
+            titleTexts.Controls.Add(new Label
             {
                 Text = "Ordner-Icon-Ersteller",
                 AutoSize = true,
                 Font = new Font("Segoe UI Semibold", 14f),
+                ForeColor = Theme.Text,
                 Margin = new Padding(0)
             });
-            titleLayout.Controls.Add(new Label
+            titleTexts.Controls.Add(new Label
             {
                 Text = "Ordner-Icons setzen – mit eigenem Bild oder per KI",
                 AutoSize = true,
-                ForeColor = SystemColors.GrayText,
+                ForeColor = Theme.Muted,
                 Margin = new Padding(1, 0, 0, 0)
             });
+            var titleLayout = new FlowLayoutPanel
+            {
+                Anchor = AnchorStyles.Left,
+                FlowDirection = FlowDirection.LeftToRight,
+                WrapContents = false,
+                AutoSize = true
+            };
+            titleLayout.Controls.Add(new IconBadge(Glyph.Picture, 40));
+            titleLayout.Controls.Add(titleTexts);
 
             var topBarButtons = new FlowLayoutPanel
             {
@@ -324,7 +339,7 @@ namespace OrdnerIconErsteller
                 WrapContents = false,
                 Anchor = AnchorStyles.Right
             };
-            StyleButton(_btnEinstellungen, 130);
+            StyleButton(_btnEinstellungen, 140);
             StyleButton(_btnRechtliches, 130);
             _btnRechtliches.Margin = new Padding(0);
             topBarButtons.Controls.Add(_btnEinstellungen);
@@ -359,10 +374,11 @@ namespace OrdnerIconErsteller
             _rechtlichesMenu.Items.Add("Drittanbieterhinweise (.NET)", null, (_, _) => ShowLegalDocument(LegalDocumentService.Document.Drittanbieterhinweise));
             _rechtlichesMenu.Items.Add(".NET-Lizenz", null, (_, _) => ShowLegalDocument(LegalDocumentService.Document.DotNetLizenz));
 
-            content.Controls.Add(sourceGroup, 0, 0);
-            content.Controls.Add(actionPanel, 0, 1);
-            content.Controls.Add(aiGroup, 0, 2);
-            content.Controls.Add(logGroup, 0, 3);
+            content.Controls.Add(folderCard, 0, 0);
+            content.Controls.Add(imageCard, 0, 1);
+            content.Controls.Add(actionPanel, 0, 2);
+            content.Controls.Add(aiCard, 0, 3);
+            content.Controls.Add(logCard, 0, 4);
 
             var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2 };
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -375,7 +391,7 @@ namespace OrdnerIconErsteller
             // Die Mindest-Scrollhoehe wird nach dem DPI-Skalieren aus dem echten Layout berechnet
             // (keine feste Pixelzahl, F-002/F-003), siehe UpdateScrollBedarf().
             scrollContent = content;
-            scrollLog = logGroup;
+            scrollLog = logCard;
             scrollHost = new Panel { Dock = DockStyle.Fill, AutoScroll = true };
             scrollHost.Controls.Add(root);
             Controls.Add(scrollHost);
@@ -385,7 +401,7 @@ namespace OrdnerIconErsteller
 
         private Panel scrollHost = null!;
         private TableLayoutPanel scrollContent = null!;
-        private GroupBox scrollLog = null!;
+        private Control scrollLog = null!;
 
         // Tatsaechlicher Platzbedarf: Unterkante des Protokollbereichs in seiner Mindesthoehe
         // plus unteres Content-Padding (F-003). GetPreferredSize des Root liefert hier zu wenig,
