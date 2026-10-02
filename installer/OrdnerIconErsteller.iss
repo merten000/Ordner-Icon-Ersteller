@@ -59,19 +59,8 @@
 #define MyAppPublisher "Merten"
 #define MyAppExeName "OrdnerIconErsteller.exe"
 
-; Quelle der fertig veroeffentlichten (self-contained, single-file) EXE.
-; Muss vorher erzeugt werden mit (aus src\OrdnerIconErsteller):
-;   dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o .\publish
-;
-; Pruefbericht v2.7.3 (Gesamtdurchlauf), Freigabeblocker 1: das csproj setzt seit
-; dieser Version <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract> -
-; dadurch landen auch die nativen Laufzeit-DLLs (D3DCompiler_47_cor3.dll,
-; PenImc_cor3.dll, PresentationNative_cor3.dll, vcruntime140_cor3.dll,
-; wpfgfx_cor3.dll) IN der einen EXE-Datei statt als separate Dateien daneben.
-; Deshalb reicht es unten unter [Files] weiterhin aus, nur {#MyAppExeName} zu
-; kopieren - das ist bewusst so und keine versehentliche Luecke. Vor jeder neuen
-; Installer-Version trotzdem einmal den frischen publish-Ordner mit dem
-; Installer-Inhalt vergleichen, falls sich das .NET-SDK-Verhalten je aendert.
+; Quelle: der komplette Publish-Ordner (normales self-contained Publish, KEIN
+; Single-File). Erzeugt wird er von build-release.bat im Repository-Hauptordner.
 #define PublishDir "..\src\OrdnerIconErsteller\publish"
 
 [Setup]
@@ -112,19 +101,9 @@ Name: "desktopicon"; Description: "Zusaetzlich ein Symbol auf dem Desktop anlege
 Name: "contextmenu"; Description: "Ins Explorer-Rechtsklick-Menue integrieren (kann spaeter im Programm unter ""Einstellungen"" jederzeit ein-/ausgeschaltet werden)"; GroupDescription: "Zusaetzliche Optionen:"; Flags: unchecked
 
 [Files]
-Source: "{#PublishDir}\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
-; Die im Programm unter "Rechtliches" angezeigten Dokumente (siehe
-; LegalDocumentService.cs) werden zur Laufzeit ueber AppContext.BaseDirectory
-; gesucht - deshalb muessen sie hier in denselben relativen Unterordner
-; "legal" neben die EXE installiert werden wie im Entwicklungs-Build
-; (csproj kopiert sie per CopyToOutputDirectory in denselben PublishDir).
-Source: "{#PublishDir}\legal\*.md"; DestDir: "{app}\legal"; Flags: ignoreversion
-; Pruefbericht v2.7.1, Freigabeblocker 1: .NET-Lizenz und Drittanbieterhinweise der
-; gebuendelten, selbstenthaltenen .NET-Runtime (Microsoft.NETCore.App.Runtime.win-x64
-; 8.0.31) muessen bei einer selbstenthaltenen .NET-Binaerdistribution mitgeliefert
-; werden. Liegen unveraendert im Unterordner "legal\dotnet-runtime" (siehe csproj)
-; und werden genauso wie die eigenen Rechtstexte installiert.
-Source: "{#PublishDir}\legal\dotnet-runtime\*.TXT"; DestDir: "{app}\legal\dotnet-runtime"; Flags: ignoreversion
+; Der gesamte Publish-Ordner (EXE, .NET-Laufzeitdateien, legal\*, LIESMICH.md,
+; rechtliche PDFs). Debug-Symbole werden nicht mitinstalliert.
+Source: "{#PublishDir}\*"; DestDir: "{app}"; Excludes: "*.pdb"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

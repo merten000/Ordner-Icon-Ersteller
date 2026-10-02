@@ -27,21 +27,12 @@
          zusammenpasst. -->
     <RuntimeFrameworkVersion>8.0.31</RuntimeFrameworkVersion>
 
-    <!-- Pruefbericht v2.7.3 (Gesamtdurchlauf), Freigabeblocker 1: der Installer kopiert
-         laut installer\OrdnerIconErsteller.iss ausschliesslich OrdnerIconErsteller.exe.
-         Ein self-contained Single-File-Publish (PublishSingleFile=true, siehe dortiger
-         Kommentar zur Publish-Befehlszeile) buendelt OHNE diese Einstellung nur
-         verwaltete DLLs in die EXE - native Laufzeitbibliotheken wie
-         D3DCompiler_47_cor3.dll, PenImc_cor3.dll, PresentationNative_cor3.dll,
-         vcruntime140_cor3.dll und wpfgfx_cor3.dll blieben bisher als SEPARATE Dateien
-         neben der EXE liegen und wurden vom Installer nicht mit installiert. Auf einem
-         Zielrechner ohne bereits vorhandene .NET-Laufzeitkomponenten waere die
-         ausgelieferte Anwendung dadurch unvollstaendig gewesen. Mit dieser Einstellung
-         werden die nativen Bibliotheken ebenfalls in die eine EXE-Datei eingebettet, so
-         dass der Installer weiterhin nur diese eine Datei kopieren muss (siehe .NET-
-         Dokumentation zu "Native libraries and single-file deployment"). -->
-    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
-
+    <!-- Release-Weg (vereinfacht): normales self-contained Publish in einen Ordner,
+         OHNE PublishSingleFile und OHNE IncludeNativeLibrariesForSelfExtract. Der
+         Installer kopiert den gesamten Publish-Ordner. Es gibt dadurch keine
+         selbstentpackende EXE (die Single-File-Variante mit eingebetteten nativen
+         Bibliotheken entpackt sich beim Start in einen Temp-Ordner). Gebaut wird
+         ausschliesslich ueber build-release.bat im Repository-Hauptordner. -->
     <!-- Bewusst KEINE Selbst-Erhöhung auf Administratorrechte:
          alles läuft im Kontext des angemeldeten Benutzers (HKCU),
          das ist einer der Gründe für die Fehlalarme der alten Version. -->
