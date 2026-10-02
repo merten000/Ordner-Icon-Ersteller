@@ -32,18 +32,42 @@ if "%ISCC%"=="" goto fehler_iscc
 "%ISCC%" "%ISS%"
 if errorlevel 1 goto fehler_installer
 
-rem --- 3) SHA-256-Pruefsummen zum Festhalten des Ergebnisses
+rem --- 3) Artefakte pruefen und SHA-256-Pruefsummen bilden (jeder Fehler -> Abbruch)
+set "APPEXE=%PUBLISH_DIR%\OrdnerIconErsteller.exe"
+if not exist "%APPEXE%" goto fehler_artefakt_exe
+
+set "SETUPEXE="
+for %%F in ("installer\output\OrdnerIconErsteller-Setup-*.exe") do set "SETUPEXE=%%~fF"
+if "%SETUPEXE%"=="" goto fehler_artefakt_setup
+if not exist "%SETUPEXE%" goto fehler_artefakt_setup
+
 echo.
-echo Pruefsummen:
-certutil -hashfile "%PUBLISH_DIR%\OrdnerIconErsteller.exe" SHA256 | findstr /v /c:"hash" /c:"CertUtil"
-for %%F in ("installer\output\OrdnerIconErsteller-Setup-*.exe") do (
-    echo %%~nxF
-    certutil -hashfile "%%F" SHA256 | findstr /v /c:"hash" /c:"CertUtil"
-)
+echo Pruefsummen (SHA-256):
+call :hash "%APPEXE%"
+if errorlevel 1 goto fehler_hash
+call :hash "%SETUPEXE%"
+if errorlevel 1 goto fehler_hash
+
+rem Letzte Kontrolle direkt vor der Erfolgsmeldung
+if not exist "%APPEXE%" goto fehler_artefakt_exe
+if not exist "%SETUPEXE%" goto fehler_artefakt_setup
 
 echo.
 echo FERTIG. Installer liegt in: installer\output
 pause
+exit /b 0
+
+:hash
+rem %~1 = Datei. Gibt den Dateinamen und den Hash aus; Errorlevel 1 bei jedem Fehler.
+set "HASHTMP=%TEMP%\ioe-hash-%RANDOM%.txt"
+certutil -hashfile "%~1" SHA256 > "%HASHTMP%" 2>&1
+if errorlevel 1 (
+    del "%HASHTMP%" >nul 2>&1
+    exit /b 1
+)
+echo %~nx1
+findstr /v /i /c:"hash" /c:"CertUtil" "%HASHTMP%"
+del "%HASHTMP%" >nul 2>&1
 exit /b 0
 
 :fehler_publishdir
@@ -60,6 +84,15 @@ echo FEHLER: Inno Setup 6 (ISCC.exe) nicht in den Standardordnern gefunden.
 goto ende_fehler
 :fehler_installer
 echo FEHLER: Inno Setup meldet einen Fehler - siehe oben. Exitcode steht in der Ausgabe.
+goto ende_fehler
+:fehler_artefakt_exe
+echo FEHLER: %PUBLISH_DIR%\OrdnerIconErsteller.exe fehlt (z.B. vom Virenscanner entfernt).
+goto ende_fehler
+:fehler_artefakt_setup
+echo FEHLER: Die Setup-EXE in installer\output fehlt (z.B. vom Virenscanner entfernt).
+goto ende_fehler
+:fehler_hash
+echo FEHLER: Pruefsumme (certutil) konnte nicht gebildet werden - Datei fehlt oder ist nicht lesbar.
 :ende_fehler
 echo.
 pause
