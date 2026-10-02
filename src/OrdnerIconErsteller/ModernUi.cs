@@ -372,12 +372,12 @@ namespace OrdnerIconErsteller
     // Weisse Karte mit weicher Kante, Symbol-Kreis und Ueberschrift (ersetzt die graue GroupBox).
     internal sealed class CardPanel : Panel
     {
-        private readonly Panel _header = new() { Dock = DockStyle.Top, Height = 44 };
         private readonly string _title;
         private readonly string? _subtitle;
         private readonly string _glyph;
         private Font? _titleFont;
         private bool _bodyAdded;
+        private const int HeaderHeight96 = 44;
 
         public CardPanel(string title, string glyph, string? subtitle = null)
         {
@@ -388,15 +388,16 @@ namespace OrdnerIconErsteller
                      ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
             // Hintergrund = Fensterfarbe (hinter den runden Ecken); die Kartenflaeche wird in OnPaint gezeichnet.
             BackColor = Theme.Background;
-            Padding = new Padding(16, 0, 16, 16);
+            Padding = new Padding(16, HeaderHeight96, 16, 16);
             Margin = new Padding(0, 0, 0, 12);
             Dock = DockStyle.Fill;
             AutoSize = true;
             AutoSizeMode = AutoSizeMode.GrowAndShrink;
         }
 
-        // Der Inhalt (Body) liegt unter der Kopfzeile. Der Body wird zuerst, die Kopfzeile danach
-        // hinzugefuegt, damit die Kopfzeile oben andockt und der Body den Rest fuellt.
+        // Der Inhalt (Body) liegt unter der Kopfzeile. Der Platz fuer den Kartenkopf wird nur ueber
+        // das obere Padding freigehalten (kein untergeordnetes Steuerelement), damit nichts den vom
+        // Parent gezeichneten Kopf (Symbol-Kreis, Ueberschrift) uebermalt (F-005).
         public void SetBody(Control body)
         {
             if (_bodyAdded) return;
@@ -404,7 +405,15 @@ namespace OrdnerIconErsteller
             body.Dock = DockStyle.Fill;
             body.BackColor = Theme.Card;
             Controls.Add(body);
-            Controls.Add(_header);
+        }
+
+        // Padding in aktuellen Pixeln (DeviceDpi) halten, unabhaengig davon, ob/wie das Formular
+        // beim Skalieren das Padding bereits angepasst hat. Nur bei Abweichung setzen.
+        protected override void OnLayout(LayoutEventArgs levent)
+        {
+            var wanted = new Padding(Theme.U(this, 16), Theme.U(this, HeaderHeight96), Theme.U(this, 16), Theme.U(this, 16));
+            if (Padding != wanted) Padding = wanted;
+            base.OnLayout(levent);
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -433,7 +442,7 @@ namespace OrdnerIconErsteller
             }
 
             // Kopfzeile: Symbol-Kreis, Ueberschrift, optionaler Hinweis in Grau.
-            int headerHeight = _header.Height;
+            int headerHeight = Theme.U(this, HeaderHeight96);
             int diameter = Theme.U(this, 30);
             int badgeX = Theme.U(this, 16);
             int badgeY = (headerHeight - diameter) / 2 + Theme.U(this, 2);
@@ -464,7 +473,6 @@ namespace OrdnerIconErsteller
             if (disposing)
             {
                 _titleFont?.Dispose();
-                _header.Dispose();
             }
             base.Dispose(disposing);
         }
