@@ -75,10 +75,16 @@ namespace OrdnerIconErsteller
         public MainForm(string? startFolder)
         {
             Text = "Ordner-Icon-Ersteller";
-            Width = 660;
-            Height = 500;
+            // Oberflaechen-Modernisierung: Segoe UI als ruhige Standardschrift und DPI-Skalierung,
+            // damit feste Knopfbreiten bei 125 %/150 % Windows-Skalierung mitwachsen (Program.cs
+            // schaltet SystemAware-DPI ein, ohne Skalierung blieben die Pixelmasse zu klein).
+            Font = new Font("Segoe UI", 9f);
+            AutoScaleDimensions = new SizeF(96F, 96F);
+            AutoScaleMode = AutoScaleMode.Dpi;
+            Width = 760;
+            Height = 720;
             StartPosition = FormStartPosition.CenterScreen;
-            MinimumSize = new Size(600, 440);
+            MinimumSize = new Size(680, 640);
 
             BuildLayout();
             WireEvents();
@@ -95,167 +101,276 @@ namespace OrdnerIconErsteller
             }
         }
 
+        // Gemeinsame Mass- und Stilwerte der Oberflaeche (Abstaende in 96-DPI-Pixeln, werden ueber
+        // AutoScaleMode.Dpi mitskaliert).
+        private const int SectionGap = 12;
+        private const int ButtonHeight = 32;
+
+        private static Label MakeCaption(string text) => new Label
+        {
+            Text = text,
+            AutoSize = true,
+            Anchor = AnchorStyles.Left,
+            Margin = new Padding(0, 0, 0, 4)
+        };
+
+        private static void StyleButton(Button button, int width, bool primary = false)
+        {
+            button.Width = width;
+            button.Height = ButtonHeight;
+            button.Margin = new Padding(0, 0, 8, 0);
+            if (primary)
+            {
+                button.Font = new Font(button.Font, FontStyle.Bold);
+            }
+        }
+
+        private static GroupBox MakeSection(string title) => new GroupBox
+        {
+            Text = title,
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            Padding = new Padding(12, 8, 12, 12),
+            Margin = new Padding(0, 0, 0, SectionGap)
+        };
+
         private void BuildLayout()
         {
-            // Layout: eine obere Werkzeugleiste (Dock=Top, volle Fensterbreite)
-            // mit den zwei Knöpfen "Einstellungen"/"Rechtliches" rechtsbündig, und
-            // darunter der restliche Inhalt (Dock=Fill). Jeder Knopf öffnet beim
-            // Klick ein aufklappendes Dropdown-Menü (ContextMenuStrip) direkt
-            // darunter - siehe die Kommentare weiter unten für die verworfenen
-            // Zwischenschritte (Band, Popup-Fenster, ComboBox).
-            var leftContent = new TableLayoutPanel
+            // Aufbau (von oben nach unten):
+            //   Kopfzeile   Titel + Kurzbeschreibung links, "Einstellungen"/"Rechtliches" rechts
+            //               (aufklappende Menues direkt unter dem jeweiligen Knopf - Standard-
+            //               Windows-Verhalten, siehe WireEvents)
+            //   Abschnitt   "Ordner und Bild"
+            //   Aktionen    "Icon setzen" (hervorgehoben) / "Icon entfernen"
+            //   Abschnitt   "Icon per KI erzeugen (optional)"
+            //   Abschnitt   "Protokoll" (nimmt den restlichen Platz)
+            // Nur das Layout wurde ueberarbeitet; Steuerelemente, Ereignisse und Logik sind unveraendert.
+            var content = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 1,
-                Padding = new Padding(12),
-                RowCount = 5
+                Padding = new Padding(16, 12, 16, 16),
+                RowCount = 4
             };
-            leftContent.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            leftContent.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            leftContent.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            leftContent.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            leftContent.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            content.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
-            // Zeile 1: Ordnerauswahl
-            var folderPanel = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, AutoSize = true };
-            folderPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            folderPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            _txtFolder.Dock = DockStyle.Fill;
-            _btnBrowseFolder.Width = 140;
-            folderPanel.Controls.Add(new Label { Text = "Ordner:", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, 6, 0, 0) }, 0, 0);
-            folderPanel.SetColumnSpan(folderPanel.Controls[0], 2);
-            folderPanel.Controls.Add(_txtFolder, 0, 1);
-            folderPanel.Controls.Add(_btnBrowseFolder, 1, 1);
+            // ---- Abschnitt "Ordner und Bild"
+            var sourceGroup = MakeSection("Ordner und Bild");
+            var sourceLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, AutoSize = true };
+            sourceLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            sourceLayout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
 
-            // Zeile 2: Bildauswahl
-            var imagePanel = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, AutoSize = true };
-            imagePanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            imagePanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            _txtImage.Dock = DockStyle.Fill;
-            _btnBrowseImage.Width = 140;
-            imagePanel.Controls.Add(new Label { Text = "Bild für das Icon:", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, 6, 0, 0) }, 0, 0);
-            imagePanel.SetColumnSpan(imagePanel.Controls[0], 2);
-            imagePanel.Controls.Add(_txtImage, 0, 1);
-            imagePanel.Controls.Add(_btnBrowseImage, 1, 1);
+            _txtFolder.Anchor = AnchorStyles.Left | AnchorStyles.Right;
+            _txtFolder.PlaceholderText = "Noch kein Ordner gewählt";
+            _txtFolder.Margin = new Padding(0, 0, 8, 12);
+            _txtImage.Anchor = AnchorStyles.Left | AnchorStyles.Right;
+            _txtImage.PlaceholderText = "Noch kein Bild gewählt";
+            _txtImage.Margin = new Padding(0, 0, 8, 0);
+            StyleButton(_btnBrowseFolder, 150);
+            _btnBrowseFolder.Margin = new Padding(0, 0, 0, 12);
+            StyleButton(_btnBrowseImage, 150);
+            _btnBrowseImage.Margin = new Padding(0);
 
-            // Zeile 3: Icon setzen/entfernen
-            var actionPanel = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
-            _btnSetIcon.Width = 150;
-            _btnRemoveIcon.Width = 150;
+            var folderCaption = MakeCaption("Ziel-Ordner");
+            var imageCaption = MakeCaption("Bild für das Icon (PNG, JPG, BMP oder ICO)");
+            sourceLayout.Controls.Add(folderCaption, 0, 0);
+            sourceLayout.SetColumnSpan(folderCaption, 2);
+            sourceLayout.Controls.Add(_txtFolder, 0, 1);
+            sourceLayout.Controls.Add(_btnBrowseFolder, 1, 1);
+            sourceLayout.Controls.Add(imageCaption, 0, 2);
+            sourceLayout.SetColumnSpan(imageCaption, 2);
+            sourceLayout.Controls.Add(_txtImage, 0, 3);
+            sourceLayout.Controls.Add(_btnBrowseImage, 1, 3);
+            sourceGroup.Controls.Add(sourceLayout);
+
+            // ---- Aktionen: Icon setzen / entfernen
+            var actionPanel = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                AutoSize = true,
+                FlowDirection = FlowDirection.LeftToRight,
+                WrapContents = false,
+                Margin = new Padding(0, 0, 0, SectionGap)
+            };
+            StyleButton(_btnSetIcon, 170, primary: true);
+            StyleButton(_btnRemoveIcon, 170);
             actionPanel.Controls.Add(_btnSetIcon);
             actionPanel.Controls.Add(_btnRemoveIcon);
 
-            // Zeile 4: Icon per KI erzeugen (optional)
-            var aiGroup = new GroupBox { Text = "Icon per KI erzeugen (optional)", Dock = DockStyle.Fill, AutoSize = true, Padding = new Padding(8) };
+            // ---- Abschnitt "Icon per KI erzeugen (optional)"
+            var aiGroup = MakeSection("Icon per KI erzeugen (optional)");
             var aiLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, AutoSize = true };
+            aiLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
 
-            // Anbieter + API-Schlüssel direkt im Hauptfenster (bewusst kein
-            // separater Dialog - siehe Rückmeldung nach dem ersten praktischen Test).
+            // Anbieter + API-Schluessel direkt im Hauptfenster (bewusst kein separater Dialog).
             var aiKeyPanel = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 5, AutoSize = true };
             aiKeyPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             aiKeyPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            _cmbAiProvider.Width = 100;
+            aiKeyPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            aiKeyPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            aiKeyPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            _cmbAiProvider.Width = 110;
+            _cmbAiProvider.Anchor = AnchorStyles.Left;
+            _cmbAiProvider.Margin = new Padding(0, 0, 8, 0);
             _cmbAiProvider.Items.Add("OpenAI");
             _cmbAiProvider.Items.Add("Google");
             _cmbAiProvider.SelectedIndex = 0;
-            _txtAiKey.Dock = DockStyle.Fill;
+            _txtAiKey.Anchor = AnchorStyles.Left | AnchorStyles.Right;
             _txtAiKey.PlaceholderText = "API-Schlüssel für den gewählten Anbieter";
-            _btnAiSaveKey.Width = 100;
-            _btnAiDeleteKey.Width = 100;
+            _txtAiKey.Margin = new Padding(0, 0, 8, 0);
+            _chkShowAiKey.AutoSize = true;
+            _chkShowAiKey.Anchor = AnchorStyles.Left;
+            _chkShowAiKey.Margin = new Padding(0, 0, 12, 0);
+            StyleButton(_btnAiSaveKey, 100);
+            StyleButton(_btnAiDeleteKey, 100);
+            _btnAiDeleteKey.Margin = new Padding(0);
             aiKeyPanel.Controls.Add(_cmbAiProvider, 0, 0);
             aiKeyPanel.Controls.Add(_txtAiKey, 1, 0);
             aiKeyPanel.Controls.Add(_chkShowAiKey, 2, 0);
             aiKeyPanel.Controls.Add(_btnAiSaveKey, 3, 0);
             aiKeyPanel.Controls.Add(_btnAiDeleteKey, 4, 0);
-            _lblAiKeyStatus.Margin = new Padding(0, 4, 0, 4);
 
-            var aiPromptPanel = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, AutoSize = true };
-            _txtAiPrompt.Dock = DockStyle.Fill;
+            _lblAiKeyStatus.Anchor = AnchorStyles.Left;
+            _lblAiKeyStatus.Margin = new Padding(0, 6, 0, 12);
+
+            var promptCaption = MakeCaption("Beschreibung (Prompt) – optional");
+            _txtAiPrompt.Anchor = AnchorStyles.Left | AnchorStyles.Right;
             _txtAiPrompt.PlaceholderText = "z. B. \"ein minimalistisches blaues Wolken-Symbol\" - leer lassen, damit der Ordnerinhalt selbst als Grundlage dient";
-            aiPromptPanel.Controls.Add(new Label { Text = "Beschreibung (Prompt) - optional:", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, 4, 0, 0) }, 0, 0);
-            aiPromptPanel.Controls.Add(_txtAiPrompt, 0, 1);
+            _txtAiPrompt.Margin = new Padding(0, 0, 0, 12);
 
-            var aiActionPanel = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
-            _btnAiGenerate.Width = 170;
-            _btnAiCancel.Width = 110;
+            var aiActionPanel = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                AutoSize = true,
+                FlowDirection = FlowDirection.LeftToRight,
+                WrapContents = false
+            };
+            StyleButton(_btnAiGenerate, 190, primary: true);
+            StyleButton(_btnAiCancel, 120);
             aiActionPanel.Controls.Add(_btnAiGenerate);
             aiActionPanel.Controls.Add(_btnAiCancel);
 
             aiLayout.Controls.Add(aiKeyPanel, 0, 0);
             aiLayout.Controls.Add(_lblAiKeyStatus, 0, 1);
-            aiLayout.Controls.Add(aiPromptPanel, 0, 2);
-            aiLayout.Controls.Add(aiActionPanel, 0, 3);
+            aiLayout.Controls.Add(promptCaption, 0, 2);
+            aiLayout.Controls.Add(_txtAiPrompt, 0, 3);
+            aiLayout.Controls.Add(aiActionPanel, 0, 4);
             aiGroup.Controls.Add(aiLayout);
 
-            // Obere Werkzeugleiste, über die volle Fensterbreite (Merten-Feedback:
-            // "musst du es oben mit den Tools und Rechtlichen nicht alles in eine
-            // extra Leiste einfügen, dass es bündig bleibt"). Zwei eigene Knöpfe
-            // ("Einstellungen" links, "Rechtliches" rechts) - jeweils mit einem
-            // klassischen aufklappenden Dropdown-Menü darunter (ContextMenuStrip),
-            // genau das Standard-Verhalten, das Merten nach dem v2.5.0-Test
-            // beschrieben hat ("dass die Menübox sich eben nach unten hin dann
-            // eben aufblättert, wie es eigentlich sonst so immer Standard ist").
-            // Frühere, verworfene Ansätze: ein seitliches "Band" mit ein-/
-            // ausklappbaren Panels (v2.3.3-v2.3.6, blieb beim Anklicken
-            // unsichtbar), je ein eigenes Popup-Fenster per Form.ShowDialog
-            // (v2.4.0/v2.4.1, funktionierte, aber nicht die gewünschte Optik),
-            // und eine gemeinsame ComboBox mit Platzhaltertext (v2.5.0, falsch
-            // verstanden - siehe Rückmeldung).
-            var topBar = new Panel { Dock = DockStyle.Top, Height = 40, Padding = new Padding(0, 4, 12, 4) };
+            // ---- Abschnitt "Protokoll" (nimmt den restlichen Platz)
+            var logGroup = new GroupBox
+            {
+                Text = "Protokoll",
+                Dock = DockStyle.Fill,
+                Padding = new Padding(12, 8, 12, 12),
+                MinimumSize = new Size(0, 110),
+                Margin = new Padding(0)
+            };
+            _txtLog.Dock = DockStyle.Fill;
+            // Schreibgeschuetzte TextBoxen bekaemen sonst den grauen "deaktiviert"-Hintergrund.
+            _txtLog.BackColor = SystemColors.Window;
+            logGroup.Controls.Add(_txtLog);
+
+            // ---- Kopfzeile: Titel links, "Einstellungen"/"Rechtliches" rechts
+            // Kopfzeile und Inhalt liegen in EINEM gemeinsamen Raster (root), damit das Ergebnis nicht von
+            // der Reihenfolge angedockter Steuerelemente abhaengt.
+            var topBar = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, AutoSize = true };
+            topBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            topBar.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            topBar.RowStyles.Add(new RowStyle(SizeType.Absolute, 1));
+            var separator = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0), BackColor = SystemColors.ControlDark };
+            var headerLayout = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 2,
+                RowCount = 1,
+                AutoSize = true,
+                Padding = new Padding(16, 10, 16, 10)
+            };
+            headerLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            headerLayout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            headerLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+            var titleLayout = new FlowLayoutPanel
+            {
+                Anchor = AnchorStyles.Left,
+                FlowDirection = FlowDirection.TopDown,
+                WrapContents = false,
+                AutoSize = true
+            };
+            titleLayout.Controls.Add(new Label
+            {
+                Text = "Ordner-Icon-Ersteller",
+                AutoSize = true,
+                Font = new Font("Segoe UI Semibold", 14f),
+                Margin = new Padding(0)
+            });
+            titleLayout.Controls.Add(new Label
+            {
+                Text = "Ordner-Icons setzen – mit eigenem Bild oder per KI",
+                AutoSize = true,
+                ForeColor = SystemColors.GrayText,
+                Margin = new Padding(1, 0, 0, 0)
+            });
+
             var topBarButtons = new FlowLayoutPanel
             {
-                Dock = DockStyle.Right,
                 AutoSize = true,
                 FlowDirection = FlowDirection.LeftToRight,
-                WrapContents = false
+                WrapContents = false,
+                Anchor = AnchorStyles.Right
             };
-            const int toggleButtonWidth = 130;
-            _btnEinstellungen.Width = toggleButtonWidth;
-            _btnRechtliches.Width = toggleButtonWidth;
+            StyleButton(_btnEinstellungen, 130);
+            StyleButton(_btnRechtliches, 130);
+            _btnRechtliches.Margin = new Padding(0);
             topBarButtons.Controls.Add(_btnEinstellungen);
             topBarButtons.Controls.Add(_btnRechtliches);
-            topBar.Controls.Add(topBarButtons);
 
-            // Inhalt des "Einstellungen"-Dropdowns: Erklärungstext (reines Label,
-            // braucht kein eigenes Feld) + der Rechtsklick-Menü-Schalter mit
-            // Status. ContextMenuStrip/ToolStripControlHost wird nur EINMAL hier
-            // aufgebaut und danach für die gesamte Laufzeit wiederverwendet -
-            // anders als bei der vorherigen Fenster-Lösung wird hier also nichts
-            // pro Klick disposed, das Dispose-Problem von v2.4.0 kann hier gar
-            // nicht erst auftreten.
-            _settingsMenu.Items.Add(new ToolStripLabel("Explorer-Rechtsklick-Menü:") { Margin = new Padding(8, 4, 8, 0) });
+            headerLayout.Controls.Add(titleLayout, 0, 0);
+            headerLayout.Controls.Add(topBarButtons, 1, 0);
+            topBar.Controls.Add(headerLayout, 0, 0);
+            topBar.Controls.Add(separator, 0, 1);
+
+            // Inhalt des "Einstellungen"-Dropdowns: Ueberschrift, Rechtsklick-Menue-Schalter und Status.
+            // ContextMenuStrip/ToolStripControlHost werden nur EINMAL hier aufgebaut und danach fuer
+            // die gesamte Laufzeit wiederverwendet (nichts wird pro Klick neu erzeugt oder disposed).
+            _lblMenuStatus.ForeColor = SystemColors.GrayText;
+            _settingsMenu.Items.Add(new ToolStripLabel("Explorer-Rechtsklick-Menü")
+            {
+                Font = new Font("Segoe UI Semibold", 9f),
+                Margin = new Padding(8, 4, 8, 0)
+            });
             _chkContextMenu.Margin = new Padding(4, 2, 4, 2);
             _lblMenuStatus.Margin = new Padding(4, 0, 4, 4);
             _settingsMenu.Items.Add(new ToolStripControlHost(_chkContextMenu));
             _settingsMenu.Items.Add(new ToolStripControlHost(_lblMenuStatus));
 
-            // Inhalt des "Rechtliches"-Dropdowns: die vier Dokumente als normale
-            // Menüpunkte (kein eigenes Button-Feld mehr nötig, da sie nur hier
-            // gebraucht werden).
+            // Inhalt des "Rechtliches"-Dropdowns: die mitgelieferten Dokumente als normale Menuepunkte.
             _rechtlichesMenu.Items.Add("Impressum", null, (_, _) => ShowLegalDocument(LegalDocumentService.Document.Impressum));
             _rechtlichesMenu.Items.Add("Datenschutz", null, (_, _) => ShowLegalDocument(LegalDocumentService.Document.Datenschutz));
             _rechtlichesMenu.Items.Add("Lizenz", null, (_, _) => ShowLegalDocument(LegalDocumentService.Document.Lizenz));
             _rechtlichesMenu.Items.Add("Haftungsausschluss", null, (_, _) => ShowLegalDocument(LegalDocumentService.Document.Haftungsausschluss));
-            // Pruefbericht v2.7.1, Freigabeblocker 1: eigener Eintrag fuer die
-            // mitgelieferten .NET-Runtime-Rechtstexte (siehe LegalDocumentService).
+            // Mitgelieferte .NET-Runtime-Rechtstexte (siehe LegalDocumentService).
             _rechtlichesMenu.Items.Add(new ToolStripSeparator());
             _rechtlichesMenu.Items.Add("Drittanbieterhinweise (.NET)", null, (_, _) => ShowLegalDocument(LegalDocumentService.Document.Drittanbieterhinweise));
             _rechtlichesMenu.Items.Add(".NET-Lizenz", null, (_, _) => ShowLegalDocument(LegalDocumentService.Document.DotNetLizenz));
 
-            // Log
-            _txtLog.Dock = DockStyle.Fill;
+            content.Controls.Add(sourceGroup, 0, 0);
+            content.Controls.Add(actionPanel, 0, 1);
+            content.Controls.Add(aiGroup, 0, 2);
+            content.Controls.Add(logGroup, 0, 3);
 
-            leftContent.Controls.Add(folderPanel, 0, 0);
-            leftContent.Controls.Add(imagePanel, 0, 1);
-            leftContent.Controls.Add(actionPanel, 0, 2);
-            leftContent.Controls.Add(aiGroup, 0, 3);
-            leftContent.Controls.Add(_txtLog, 0, 4);
-
-            // Reihenfolge: die oben angedockte Leiste zuerst, danach das
-            // Dock=Fill-Element, das dann zuverlässig den kompletten Rest der
-            // Fensterhöhe bekommt.
-            Controls.Add(topBar);
-            Controls.Add(leftContent);
+            var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2 };
+            root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            root.Controls.Add(topBar, 0, 0);
+            root.Controls.Add(content, 0, 1);
+            Controls.Add(root);
         }
 
         private void WireEvents()
