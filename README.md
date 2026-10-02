@@ -1,5 +1,11 @@
 # Ordner-Icon-Ersteller (Version 2.7.4 – komplette Neuentwicklung)
 
+> **Release-Hinweis:** Gebaut wird ausschließlich mit `build-release.bat`
+> (Ordner-Publish + Inno-Installer, siehe Abschnitt "Release und Installer
+> bauen" und `RELEASE.md`). Frühere Beschreibungen von `publish.bat`,
+> Single-File-Publish und `IncludeNativeLibrariesForSelfExtract` weiter unten
+> sind Versionsgeschichte und gelten nicht mehr.
+
 ## ChatGPT-Gegenprüfung v2.7.3 (Gesamtdurchlauf): zwei Freigabeblocker + zwei weitere Punkte behoben (v2.7.3 → v2.7.4)
 
 ChatGPT hat Commit `fa2cc8a` (v2.7.3) im ersten kompletten Gesamtdurchlauf
@@ -1185,34 +1191,34 @@ dotnet build
 (Es gibt jetzt auch `OrdnerIconErsteller.sln` im Hauptordner - `dotnet build`
 direkt dort baut Haupt- und Testprojekt zusammen.)
 
-Fertige, startbare EXE erzeugen (einzelne Datei, keine separate .NET-Installation
-beim Nutzer nötig):
+Fertigen Release (Publish-Ordner + Installer) erzeugen: Doppelklick auf
+`build-release.bat` im Hauptordner (Details siehe unten und `RELEASE.md`). Der
+Publish ist ein normales self-contained Publish in einen Ordner (keine separate
+.NET-Installation beim Nutzer nötig), **kein** Single-File und keine
+selbstentpackende EXE. Der Publish-Ordner liegt danach unter
+`src\OrdnerIconErsteller\publish\` (startbar: `OrdnerIconErsteller.exe` darin).
 
-```powershell
-dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o .\publish
-```
+## Release und Installer bauen (Stand `6e19609`)
 
-Die EXE liegt danach unter `src\OrdnerIconErsteller\publish\OrdnerIconErsteller.exe`.
+Voraussetzung: .NET-8-SDK und [Inno Setup 6](https://jrsoftware.org/isinfo.php)
+in einem der Standardordner (kostenlos).
 
-## Installer bauen (Inno Setup)
+1. Doppelklick auf `build-release.bat` im Hauptordner. Das Skript
+   - erzeugt den Publish-Ordner (`dotnet publish -c Release -r win-x64
+     --self-contained true`, ohne Single-File),
+   - kopiert `release-extras` hinein,
+   - kompiliert `installer\OrdnerIconErsteller.iss` mit Inno Setup und
+   - gibt SHA-256-Prüfsummen von EXE und Installer aus.
+   Es bricht bei jedem Fehler mit einer Meldung ab.
+2. Der fertige Installer liegt danach unter
+   `installer\output\OrdnerIconErsteller-Setup-<Version>.exe`.
+3. Die Versionsnummer steht an zwei Stellen: `Version` in
+   `src\OrdnerIconErsteller\OrdnerIconErsteller.csproj` und `MyAppVersion` in
+   `installer\OrdnerIconErsteller.iss`.
 
-Voraussetzung: [Inno Setup](https://jrsoftware.org/isinfo.php) ist auf dem
-Windows-Rechner installiert (kostenlos).
-
-1. Zuerst die self-contained EXE wie oben beschrieben erzeugen:
-   ```powershell
-   cd src\OrdnerIconErsteller
-   dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o .\publish
-   ```
-2. Danach das Installer-Skript kompilieren, entweder per Rechtsklick auf
-   `installer\OrdnerIconErsteller.iss` -> "Compile", oder über die
-   Kommandozeile:
-   ```powershell
-   cd installer
-   iscc OrdnerIconErsteller.iss
-   ```
-3. Der fertige Installer liegt danach unter
-   `installer\output\OrdnerIconErsteller-Setup-2.1.4.exe`.
+Der Installer kopiert den gesamten Publish-Ordner (ohne `.pdb`-Dateien) nach
+`{app}`. Installieren, Starten und Deinstallieren sind in `RELEASE.md`
+beschrieben.
 
 Bewusste Entscheidungen im Installer-Skript (Details als Kommentare direkt in
 `installer\OrdnerIconErsteller.iss`):
@@ -1221,21 +1227,33 @@ Bewusste Entscheidungen im Installer-Skript (Details als Kommentare direkt in
   `%LOCALAPPDATA%\Programs\Ordner-Icon-Ersteller` - **keine
   Administratorrechte, keine UAC-Abfrage**, passend zum Grundprinzip des
   gesamten Programms (alles läuft über HKCU).
-- Der Explorer-Rechtsklick-Menü-Eintrag wird weiterhin ausschließlich über
-  den Knopf "Ins Rechtsklick-Menü integrieren" im Programm selbst gesetzt -
-  der Installer registriert bei der Installation nichts automatisch.
+- Der Explorer-Rechtsklick-Menü-Eintrag wird entweder über den Knopf "Ins
+  Rechtsklick-Menü integrieren" im Programm gesetzt oder über die
+  Installer-Aufgabe "Ins Explorer-Rechtsklick-Menü integrieren" (standardmäßig
+  nicht angehakt).
 - Beim Deinstallieren wird der Registry-Zweig des Menü-Eintrags
   (`HKCU\Software\Classes\Directory\shell\OrdnerIconErsteller`) vollständig
   entfernt, damit kein toter Menüeintrag auf eine gelöschte EXE zeigt.
+- Beim Deinstallieren ruft der Installer vor dem Entfernen der Dateien
+  `OrdnerIconErsteller.exe --uninstall-cleanup` auf (ohne Fenster); das
+  entfernt die gespeicherten API-Schlüssel und den Zustimmungswert.
 - Eine feste `AppId` (GUID) im Skript sorgt dafür, dass eine neue Version die
   alte sauber ersetzt, statt einen zweiten Eintrag in "Apps & Features"
   anzulegen - diese GUID darf sich zwischen Versionen nicht ändern.
 
-**Praktisch getestet:** Merten hat den Installer unter Windows erfolgreich
-getestet (Installation ohne Sicherheitsabfrage, Virenscanner-Reaktion,
-Funktion nach Installation, Deinstallation inkl. Registry-Aufräumung).
-Zusätzlich hat ChatGPT das Skript selbst code-geprüft (Commit `621f37d`,
-Nachprüfung nach Korrekturen: Commit `65b88b6`) - keine offenen Blocker mehr.
+**Praktisch getestet (Stand `6e19609`):** Merten hat unter Windows
+`build-release.bat` vollständig durchlaufen lassen; Inno Setup erzeugte den
+Installer, Installation und Programmstart funktionierten ohne
+Virenscanner-Blockierung (AVG). **Nicht getestet** ist bisher die
+Deinstallation in diesem Stand (inkl. `--uninstall-cleanup`). Die frühere
+Ursache der Virenscanner-Meldung (Vorgang IOE-2026-001, F-004) ist weiterhin
+unbekannt; der Erkennungsname wurde nie ermittelt. Das Programm und die EXE
+sind unsigniert, ein erneuter Alarm bei anderen Virenscannern oder nach
+Signaturupdates lässt sich nicht ausschließen.
+
+Ältere Testangaben in den Abschnitten oben (Single-File-Publish,
+`IncludeNativeLibrariesForSelfExtract`, `publish.bat`) beschreiben frühere
+Versionsstände und sind durch den neuen Release-Weg ersetzt.
 
 ## Automatisierte Tests ausführen
 
@@ -1295,9 +1313,9 @@ oben "Änderungen nach der 2. ChatGPT-Gegenprüfung der KI-Icon-Funktion").
 
 ## Nächste Schritte (nach deiner Freigabe)
 
-- Installer (Inno Setup) ist vorhanden und von Merten praktisch getestet
-  (Installation, Virenscanner, Funktion, Deinstallation) sowie von ChatGPT
-  code-geprüft
+- Release-/Installer-Weg (`build-release.bat`, Inno Setup) ist vorhanden; Build,
+  Installer, Installation und Start sind von Merten getestet (Stand `6e19609`),
+  die Deinstallation in diesem Stand noch nicht
 - KI-Icon-Erzeugung (OpenAI + Google, Credential Manager, einmaliger Hinweis)
   ist implementiert und wartet auf praktisches Testen durch Merten sowie die
   ChatGPT-Codeprüfung
