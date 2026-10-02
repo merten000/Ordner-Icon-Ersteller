@@ -13,6 +13,7 @@ rem --- 1) Publish: normales self-contained Publish in einen Ordner (kein Single
 if exist "%PUBLISH_DIR%" rmdir /s /q "%PUBLISH_DIR%"
 if exist "%PUBLISH_DIR%" goto fehler_publishdir
 if exist "installer\output" rmdir /s /q "installer\output"
+if exist "installer\output" goto fehler_cleanup_output
 
 dotnet publish "src\OrdnerIconErsteller\OrdnerIconErsteller.csproj" -c Release -r win-x64 --self-contained true -o "%PUBLISH_DIR%"
 if errorlevel 1 goto fehler_publish
@@ -36,9 +37,12 @@ rem --- 3) Artefakte pruefen und SHA-256-Pruefsummen bilden (jeder Fehler -> Abb
 set "APPEXE=%PUBLISH_DIR%\OrdnerIconErsteller.exe"
 if not exist "%APPEXE%" goto fehler_artefakt_exe
 
-set "SETUPEXE="
-for %%F in ("installer\output\OrdnerIconErsteller-Setup-*.exe") do set "SETUPEXE=%%~fF"
-if "%SETUPEXE%"=="" goto fehler_artefakt_setup
+rem Erwartete Setup-Datei gezielt aus der Version im Installer-Skript ableiten
+rem (kein Wildcard: eine alte Setup-EXE darf nie als aktueller Build gelten).
+set "APPVER="
+for /f "tokens=3" %%V in ('findstr /b /c:"#define MyAppVersion" "%ISS%"') do set "APPVER=%%~V"
+if "%APPVER%"=="" goto fehler_version
+set "SETUPEXE=%CD%\installer\output\OrdnerIconErsteller-Setup-%APPVER%.exe"
 if not exist "%SETUPEXE%" goto fehler_artefakt_setup
 
 echo.
@@ -85,11 +89,17 @@ goto ende_fehler
 :fehler_installer
 echo FEHLER: Inno Setup meldet einen Fehler - siehe oben. Exitcode steht in der Ausgabe.
 goto ende_fehler
+:fehler_cleanup_output
+echo FEHLER: Alter Ordner installer\output konnte nicht entfernt werden (Datei noch geoeffnet?).
+goto ende_fehler
+:fehler_version
+echo FEHLER: MyAppVersion konnte in %ISS% nicht gelesen werden.
+goto ende_fehler
 :fehler_artefakt_exe
 echo FEHLER: %PUBLISH_DIR%\OrdnerIconErsteller.exe fehlt (z.B. vom Virenscanner entfernt).
 goto ende_fehler
 :fehler_artefakt_setup
-echo FEHLER: Die Setup-EXE in installer\output fehlt (z.B. vom Virenscanner entfernt).
+echo FEHLER: Die erwartete Setup-EXE (OrdnerIconErsteller-Setup-%APPVER%.exe) in installer\output fehlt (z.B. vom Virenscanner entfernt).
 goto ende_fehler
 :fehler_hash
 echo FEHLER: Pruefsumme (certutil) konnte nicht gebildet werden - Datei fehlt oder ist nicht lesbar.
