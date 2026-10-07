@@ -16,20 +16,15 @@ namespace OrdnerIconErsteller
         private readonly Button _btnBrowseImage = new ModernButton { Text = "Bild wählen...", Glyph = Glyph.Picture };
         private readonly Button _btnSetIcon = new ModernButton { Text = "Icon setzen", Kind = ButtonKind.Primary, Glyph = Glyph.Check, CornerColor = Theme.Background };
         private readonly Button _btnRemoveIcon = new ModernButton { Text = "Icon entfernen", Glyph = Glyph.Delete, CornerColor = Theme.Background };
-        private readonly CheckBox _chkContextMenu = new() { Text = "Ins Rechtsklick-Menü integrieren", AutoSize = true };
-        private readonly Label _lblMenuStatus = new() { AutoSize = true };
-        // Merten-Feedback (v2.5.0-Test): gemeint war kein gemeinsames "Menü"-Dropdown,
-        // sondern zwei eigene Knöpfe ("Einstellungen" links, "Rechtliches" rechts),
-        // bei denen sich beim Klick jeweils darunter ein aufklappendes Menü öffnet -
-        // also das ganz normale Windows-Standardverhalten eines Dropdown-Menüs unter
-        // einem Knopf (ContextMenuStrip.Show), NICHT ein eigenes Popup-Fenster und
-        // NICHT eine gemeinsame ComboBox. Die beiden ContextMenuStrip-Objekte werden
-        // einmalig in BuildLayout() befüllt und danach nur noch wiederverwendet -
-        // dadurch entfällt auch das Dispose-Problem der vorherigen Fenster-Lösung
-        // (v2.4.0/v2.4.1), weil hier nichts pro Klick neu erzeugt/verworfen wird.
-        private readonly Button _btnEinstellungen = new ModernButton { Text = "Einstellungen", Glyph = Glyph.Settings, TrailingGlyph = Glyph.Chevron, CornerColor = Theme.Background };
+        // "Einstellungen" (links) und "Rechtliches" (rechts) sind zwei eigene Knöpfe.
+        // "Rechtliches" öffnet weiterhin ein aufklappendes Menü direkt unter dem Knopf
+        // (ContextMenuStrip.Show, nur normale Menüpunkte). "Einstellungen" öffnet dagegen ein
+        // normales kleines Einstellungsfenster (SettingsForm): das frühere Aufklappmenü mit
+        // eingebetteten Steuerelementen (ToolStripControlHost) löste auf echtem Windows in
+        // ToolStripDropDownMenu.ScrollInternal eine ArgumentOutOfRangeException aus und stellte
+        // den Text nicht vollständig dar - deshalb kein Pfeil-/Bildlauf-Menü mehr dafür.
+        private readonly Button _btnEinstellungen = new ModernButton { Text = "Einstellungen", Glyph = Glyph.Settings, CornerColor = Theme.Background };
         private readonly Button _btnRechtliches = new ModernButton { Text = "Rechtliches", Glyph = Glyph.Page, TrailingGlyph = Glyph.Chevron, CornerColor = Theme.Background };
-        private readonly ContextMenuStrip _settingsMenu = new();
         private readonly ContextMenuStrip _rechtlichesMenu = new();
         private readonly TextBox _txtAiPrompt = new();
         private readonly ComboBox _cmbAiProvider = new() { DropDownStyle = ComboBoxStyle.DropDownList };
@@ -89,7 +84,6 @@ namespace OrdnerIconErsteller
 
             BuildLayout();
             WireEvents();
-            RefreshMenuStatus();
             RefreshAiKeyField();
 
             if (!string.IsNullOrEmpty(startFolder))
@@ -350,20 +344,6 @@ namespace OrdnerIconErsteller
             topBar.Controls.Add(headerLayout, 0, 0);
             topBar.Controls.Add(separator, 0, 1);
 
-            // Inhalt des "Einstellungen"-Dropdowns: Ueberschrift, Rechtsklick-Menue-Schalter und Status.
-            // ContextMenuStrip/ToolStripControlHost werden nur EINMAL hier aufgebaut und danach fuer
-            // die gesamte Laufzeit wiederverwendet (nichts wird pro Klick neu erzeugt oder disposed).
-            _lblMenuStatus.ForeColor = SystemColors.GrayText;
-            _settingsMenu.Items.Add(new ToolStripLabel("Explorer-Rechtsklick-Menü")
-            {
-                Font = new Font("Segoe UI Semibold", 9f),
-                Margin = new Padding(8, 4, 8, 0)
-            });
-            _chkContextMenu.Margin = new Padding(4, 2, 4, 2);
-            _lblMenuStatus.Margin = new Padding(4, 0, 4, 4);
-            _settingsMenu.Items.Add(new ToolStripControlHost(_chkContextMenu));
-            _settingsMenu.Items.Add(new ToolStripControlHost(_lblMenuStatus));
-
             // Inhalt des "Rechtliches"-Dropdowns: die mitgelieferten Dokumente als normale Menuepunkte.
             _rechtlichesMenu.Items.Add("Impressum", null, (_, _) => ShowLegalDocument(LegalDocumentService.Document.Impressum));
             _rechtlichesMenu.Items.Add("Datenschutz", null, (_, _) => ShowLegalDocument(LegalDocumentService.Document.Datenschutz));
@@ -439,7 +419,6 @@ namespace OrdnerIconErsteller
 
             _btnSetIcon.Click += async (_, _) => await SetIconAsync();
             _btnRemoveIcon.Click += async (_, _) => await RemoveIconAsync();
-            _chkContextMenu.CheckedChanged += (_, _) => OnContextMenuCheckedChanged();
             _btnAiGenerate.Click += async (_, _) => await GenerateAiIconAsync();
             _btnAiCancel.Click += (_, _) => RequestAiCancel();
             _cmbAiProvider.SelectedIndexChanged += (_, _) => RefreshAiKeyField();
@@ -447,10 +426,10 @@ namespace OrdnerIconErsteller
             _btnAiSaveKey.Click += (_, _) => SaveAiKey();
             _btnAiDeleteKey.Click += (_, _) => DeleteAiKey();
 
-            // Klassisches aufklappendes Dropdown-Menü direkt unter dem jeweiligen
-            // Knopf (Merten-Feedback nach v2.5.0-Test) - der Menü-Inhalt selbst
-            // wurde bereits einmalig in BuildLayout() befüllt.
-            _btnEinstellungen.Click += (_, _) => _settingsMenu.Show(_btnEinstellungen, new Point(0, _btnEinstellungen.Height));
+            // "Einstellungen" öffnet ein normales Einstellungsfenster, "Rechtliches" ein
+            // klassisches aufklappendes Menü direkt unter dem Knopf (Inhalt einmalig in
+            // BuildLayout() befüllt).
+            _btnEinstellungen.Click += (_, _) => OpenSettings();
             _btnRechtliches.Click += (_, _) => _rechtlichesMenu.Show(_btnRechtliches, new Point(0, _btnRechtliches.Height));
         }
 
@@ -629,19 +608,31 @@ namespace OrdnerIconErsteller
             return true;
         }
 
-        // Verhindert, dass RefreshMenuStatus() (das den Haken programmatisch auf den
-        // tatsächlichen Registry-Zustand setzt) selbst wieder OnContextMenuCheckedChanged
-        // auslöst und damit ungewollt ein zweites Mal Register()/Unregister() aufruft.
-        private bool _suppressContextMenuCheckedEvent;
-
-        private void OnContextMenuCheckedChanged()
+        /// <summary>
+        /// Öffnet das Einstellungsfenster (modal). Die Registry-Logik bleibt in
+        /// <see cref="ContextMenuService"/>; das Fenster bekommt nur "Zustand lesen" und
+        /// "Zustand ändern" (<see cref="ApplyContextMenuSetting"/>) übergeben.
+        /// </summary>
+        private void OpenSettings()
         {
-            if (_suppressContextMenuCheckedEvent)
+            try
             {
-                return;
+                using var dlg = new SettingsForm(ContextMenuService.IsRegistered, ApplyContextMenuSetting);
+                dlg.ShowDialog(this);
             }
+            catch (Exception ex)
+            {
+                Log($"FEHLER beim Öffnen der Einstellungen: {ex.Message}");
+                MessageBox.Show(this, $"Die Einstellungen konnten nicht geöffnet werden:\n{ex.Message}", "Fehler",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
 
-            if (_chkContextMenu.Checked)
+        // Trägt den Rechtsklick-Menü-Eintrag ein (enable = true) bzw. entfernt ihn - unverändert
+        // dieselbe Logik und dieselben Meldungen wie zuvor beim Haken im Aufklappmenü.
+        private void ApplyContextMenuSetting(IWin32Window owner, bool enable)
+        {
+            if (enable)
             {
                 try
                 {
@@ -651,7 +642,7 @@ namespace OrdnerIconErsteller
                 catch (Exception ex)
                 {
                     Log($"FEHLER beim Eintragen des Menüs: {ex.Message}");
-                    MessageBox.Show(this, $"Fehler beim Eintragen ins Kontextmenü:\n{ex.Message}", "Fehler",
+                    MessageBox.Show(owner, $"Fehler beim Eintragen ins Kontextmenü:\n{ex.Message}", "Fehler",
                         MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
             }
@@ -665,12 +656,10 @@ namespace OrdnerIconErsteller
                 catch (Exception ex)
                 {
                     Log($"FEHLER beim Entfernen des Menüs: {ex.Message}");
-                    MessageBox.Show(this, $"Fehler beim Entfernen aus dem Kontextmenü:\n{ex.Message}", "Fehler",
+                    MessageBox.Show(owner, $"Fehler beim Entfernen aus dem Kontextmenü:\n{ex.Message}", "Fehler",
                         MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
             }
-
-            RefreshMenuStatus();
         }
 
         private bool IsGoogleSelected => _cmbAiProvider.SelectedIndex == 1;
@@ -1178,29 +1167,6 @@ namespace OrdnerIconErsteller
             }
 
             base.OnFormClosing(e);
-        }
-
-        private void RefreshMenuStatus()
-        {
-            bool isRegistered = ContextMenuService.IsRegistered();
-
-            // Zustand des Kontrollkästchens IMMER an den tatsächlichen Registry-Zustand
-            // angleichen, statt ihm blind zu vertrauen - z.B. falls Register()/Unregister()
-            // oben fehlgeschlagen ist, damit die Checkbox dann nicht einen Zustand zeigt,
-            // der gar nicht eingetreten ist.
-            _suppressContextMenuCheckedEvent = true;
-            try
-            {
-                _chkContextMenu.Checked = isRegistered;
-            }
-            finally
-            {
-                _suppressContextMenuCheckedEvent = false;
-            }
-
-            _lblMenuStatus.Text = isRegistered
-                ? "Status: aktuell im Kontextmenü eingetragen"
-                : "Status: nicht eingetragen";
         }
 
         private void Log(string message)
