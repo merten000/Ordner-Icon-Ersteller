@@ -9,11 +9,22 @@ Video-Sammlungen auf einen Blick auseinanderzuhalten.
 Die Setup-Datei gibt es hier auf GitHub unter [Releases](https://github.com/merten000/Ordner-Icon-Ersteller/releases) und identisch bei [SourceForge](https://sourceforge.net/projects/ordnericonerstellerrelease/files/). Beide Stellen enthalten dieselbe `OrdnerIconErsteller-Setup-2.7.4.exe` samt `SHA256SUMS.txt` zum Vergleich. Quellcode ist absichtlich nicht enthalten.
 
 ## Screenshots
-<img width="531" height="748" alt="image" src="https://github.com/user-attachments/assets/70093436-c6f4-44de-bcda-d0f842bf521c" />
-<img width="684" height="782" alt="image" src="https://github.com/user-attachments/assets/d19d752d-e6d3-421c-8314-296818108b67" />
-<img width="641" height="732" alt="image" src="https://github.com/user-attachments/assets/98cf6c1c-624d-481b-9114-d55db18b7982" />
-<img width="519" height="738" alt="image" src="https://github.com/user-attachments/assets/8f64199e-4dc1-4bf4-85dd-198a3ad86d75" />
 
+![Hauptfenster](screenshots/1%20Titelbild.PNG)
+
+*Hauptfenster: Ziel-Ordner, Bild oder KI-Icon.*
+
+![Einstellungen mit Explorer-Rechtsklick-Menü](screenshots/2%20Explorer%20Men%C3%BC.PNG)
+
+*Einstellungen: Eintrag im Explorer-Rechtsklick-Menü ein- oder ausschalten.*
+
+![KI-Icon ohne Beschreibung: Ordnerinhalt wird geprüft](screenshots/3%20Ki%20erstellt%20Bild%20ohne%20Angaben%2C%20Pr%C3%BCft%20den%20ausgew%C3%A4hlten%20Ordner.PNG)
+
+*KI-Icon ohne Beschreibung: Das Programm prüft den ausgewählten Ordner und fragt, ob ein gefundenes Bild als Vorlage mitgesendet werden soll.*
+
+![Ordner mit neuem Icon im Explorer](screenshots/5%20Ordnerausschnitt.PNG)
+
+*Ergebnis: Der Ordner hat sein eigenes Icon.*
 
 **Das ist noch eine fruehe Version.** Sie kann schon:
 
