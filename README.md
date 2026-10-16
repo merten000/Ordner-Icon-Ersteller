@@ -4,6 +4,10 @@ Ein kleines Programm, um einem einzelnen Ordner ein eigenes Symbol (Icon)
 zu geben - z. B. um deine Steam-Spieleordner, Projektordner oder
 Video-Sammlungen auf einen Blick auseinanderzuhalten.
 
+## Download
+
+Die Setup-Datei gibt es hier auf GitHub unter [Releases](https://github.com/merten000/Ordner-Icon-Ersteller/releases) und identisch bei [SourceForge](https://sourceforge.net/projects/ordnericonerstellerrelease/files/). Beide Stellen enthalten dieselbe `OrdnerIconErsteller-Setup-2.7.4.exe` samt `SHA256SUMS.txt` zum Vergleich. Quellcode ist absichtlich nicht enthalten.
+
 ## Screenshots
 <img width="531" height="748" alt="image" src="https://github.com/user-attachments/assets/70093436-c6f4-44de-bcda-d0f842bf521c" />
 <img width="684" height="782" alt="image" src="https://github.com/user-attachments/assets/d19d752d-e6d3-421c-8314-296818108b67" />
@@ -49,7 +53,7 @@ Windows-Eigenheit, kein Fehler im Programm.
 
 ## Installation
 
-`Ordner-Icon-Ersteller-Setup.exe` doppelklicken -> Installations-Assistent
+`OrdnerIconErsteller-Setup-2.7.4.exe` doppelklicken -> Installations-Assistent
 -> Zielordner waehlen (frei waehlbar) -> Installieren. Verknuepfungen
 liegen danach im Startmenue und auf dem Desktop. Deinstallation ueber
 Windows-Einstellungen -> "Apps" -> "Ordner-Icon-Ersteller", oder ueber die
@@ -172,6 +176,6 @@ ein Quadrat gesetzt (nicht verzerrt).
 
 ## Hinweis zu Windows-Warnungen
 
-`Ordner-Icon-Ersteller-Setup.exe` und `Ordner-Icon-Ersteller.exe` sind
+`OrdnerIconErsteller-Setup-2.7.4.exe` ist
 nicht digital signiert. Eine SmartScreen-Warnung beim ersten Start ist
 normal bei selbst gebauten Programmen, kein Hinweis auf Schadsoftware.
