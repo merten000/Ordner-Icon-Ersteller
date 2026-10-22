@@ -8,6 +8,10 @@ Video-Sammlungen auf einen Blick auseinanderzuhalten.
 
 Die Setup-Datei gibt es hier auf GitHub unter [Releases](https://github.com/merten000/Ordner-Icon-Ersteller/releases) und identisch bei [SourceForge](https://sourceforge.net/projects/ordnericonerstellerrelease/files/). Beide Stellen enthalten dieselbe `OrdnerIconErsteller-Setup-2.7.4.exe` samt `SHA256SUMS.txt` zum Vergleich. Quellcode ist absichtlich nicht enthalten.
 
+## Video
+
+Kurzes Video zum Programm: [Ordner-Icon-Ersteller auf YouTube](https://www.youtube.com/watch?v=MMKSEQPjy9M)
+
 ## Screenshots
 
 ![Hauptfenster](screenshots/1%20Titelbild.PNG)
