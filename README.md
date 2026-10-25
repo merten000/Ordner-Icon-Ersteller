@@ -12,6 +12,8 @@ Die Setup-Datei gibt es hier auf GitHub unter [Releases](https://github.com/mert
 
 Kurzes Video zum Programm: [Ordner-Icon-Ersteller auf YouTube](https://www.youtube.com/watch?v=MMKSEQPjy9M)
 
+Mehr Videos findest du auf meinem [YouTube-Kanal](https://www.youtube.com/@merten9201).
+
 ## Screenshots
 
 ![Hauptfenster](screenshots/1%20Titelbild.PNG)
